@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package omniserve.inference.v1;
+
+option go_package = "github.com/omniserve/llm_inference_server/proto/gen/go/inferencepb";
+
+// 推理请求
+message InferenceRequest {
+  string request_id = 1;
+  string model_name = 2;
+  string prompt = 3;
+
+  // 生成参数
+  GenerationParams params = 4;
+}
+
+message GenerationParams {
+  int32 max_tokens = 1;
+  float temperature = 2;
+  float top_p = 3;
+  int32 top_k = 4;
+  float repetition_penalty = 5;
+  bool stream = 6;
+}
+
+// 推理响应（流式，每次返回一个或多个 token）
+message InferenceResponse {
+  string request_id = 1;
+  string token = 2;
+  bool finished = 3;
+
+  // 完成时附带的统计信息
+  UsageStats usage = 4;
+}
+
+message UsageStats {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+  float time_to_first_token_ms = 4;
+  float total_latency_ms = 5;
+}
+
+// Worker 健康上报
+message HealthReport {
+  string worker_id = 1;
+  string model_name = 2;
+  float gpu_memory_used_mb = 3;
+  float gpu_memory_total_mb = 4;
+  float gpu_utilization = 5;
+  int32 active_requests = 6;
+  int32 max_batch_size = 7;
+}
+
+message HealthAck {
+  bool accepted = 1;
+}
+
+// 核心服务定义
+service InferenceService {
+  // 单次推理（非流式）
+  rpc Infer(InferenceRequest) returns (InferenceResponse);
+
+  // 流式推理：服务端逐 token 推送
+  rpc InferStream(InferenceRequest) returns (stream InferenceResponse);
+}
+
+// 调度层与 Worker 之间的控制面通信
+service WorkerControl {
+  // Worker 定期上报健康状态
+  rpc ReportHealth(stream HealthReport) returns (stream HealthAck);
+}
