@@ -1,40 +1,48 @@
+这份重新设计的 Proposal 将项目提升到了**工业级推理框架（如 vLLM, TGI, TensorRT-LLM）**的深度。
 
-# 项目提案：OmniServe 分布式高性能推理引擎
-**Project Proposal: OmniServe - High-Performance Distributed LLM Inference System**
+---
 
-### 1. 项目背景 (Problem Statement)
-当前大语言模型（LLM）在生产环境面临两大瓶颈：
-*   **计算资源浪费**：传统的静态 Batching 导致 GPU 在等待长文本生成时出现空闲。
-*   **内存碎片化**：KV Cache 占用大量显存且动态变化，导致 OOM 或低吞吐量。
-*   **系统扩展性差**：单机推理难以支撑高并发用户需求。
+# 项目提案：OmniServe - 基于 C++/Go 的分布式高性能推理引擎
+**Project Proposal: OmniServe - Distributed Inference Engine with C++ Performance Core**
 
-**OmniServe** 旨在构建一个分布式的推理后端，通过系统级优化（Systems for ML）实现高吞吐、低延迟的模型服务。
+### 1. 项目愿景 (Objective)
+构建一个支持多机多卡、低延迟、高吞吐的 LLM 推理系统。通过 **Go 处理高并发网络请求**，**C++ 负责底层内存与算子优化**，**Python 进行模型逻辑编排**，实现一个完整的生产级高性能系统。
 
-### 2. 核心架构 (Architecture)
-项目采用**解耦架构**，分为三层：
-*   **接入层 (Control Plane - Go)**：基于 Go 语言实现的 API Gateway，负责高并发请求接收、鉴权、速率限制（Rate Limiting）。
-*   **调度层 (Orchestrator - Go/gRPC)**：核心调度引擎。实现请求队列管理，根据 Worker 节点的显存水位进行负载均衡。
-*   **推理层 (Data Plane - Python/C++/CUDA)**：基于 `vLLM` 或 `Triton` 思想的推理节点。实现 **Continuous Batching** 和 **PagedAttention**。
+### 2. 三层架构设计 (The 3-Tier Architecture)
+
+*   **接入层 (Gateway - Go)**
+    *   **职责**：处理数万级并发连接，负载均衡，请求去重。
+    *   **关键技术**：Goroutines, gRPC Server, Redis (Session state), JWT Auth.
+*   **调度层 (Orchestrator - Python/C++)**
+    *   **职责**：请求的批处理（Batching）策略，控制 Continuous Batching 逻辑。
+    *   **关键技术**：Pybind11 (调用 C++ 核心), Asyncio.
+*   **性能内核 (Engine Core - C++) —— *核心竞争力***
+    *   **职责**：**KV-Cache 管理器**、**显存池管理**、**高性能请求队列**。
+    *   **关键技术**：C++17, Smart Pointers, Multi-threading, CUDA Kernels (可选).
 
 ### 3. 技术栈 (Technical Stack)
-*   **后端/系统**：Go, gRPC, Protobuf, Redis (状态存储)
-*   **算法/推理**：Python, PyTorch, NVIDIA Triton, CUDA (选学)
-*   **基础设施**：Docker, Kubernetes, Prometheus, Grafana
-*   **模型**：Llama-3 (8B) 或 Mistral-7B
+*   **语言**：C++ (内核), Go (网关), Python (编排)
+*   **通信**：gRPC, Protobuf, Shared Memory (本地进程间通信优化)
+*   **库/工具**：Pybind11, LibTorch (C++ 版 PyTorch), NVIDIA Triton, GTest (C++ 测试框架)
+*   **部署**：Docker, Kubernetes, Prometheus, Grafana
 
-### 4. 关键技术点 (Key Features / Milestones)
-*   **Phase 1: 分布式通信框架**
-    *   使用 **gRPC** 定义双向流式通信协议，实现 Go 网关与 Python 推理节点的低延迟互联。
-*   **Phase 2: 高效调度策略 (SWE 核心)**
-    *   实现基于 **优先级队列** 的请求调度，支持请求在网关层的缓冲与聚合，防止后端过载。
-*   **Phase 3: 推理性能优化 (MLE 核心)**
-    *   实现 **Continuous Batching**：允许新请求在已有请求生成过程中动态加入 Batch。
-    *   实现 **KV Cache 管理**：引入类似虚拟内存的分页机制，减少显存碎片，提升 2-3 倍吞吐量。
-*   **Phase 4: 可观测性与部署**
-    *   集成 **Prometheus** 监控指标（如：Tokens/sec, Time-to-First-Token, GPU Util）。
-    *   编写 **Helm Charts**，支持在 K8s 上的快速水平扩容。
+### 4. 核心研发里程碑 (Key Milestones)
 
-### 5. 预期成果 (Expected Impact)
-*   **性能指标**：在高并发场景下，吞吐量相较于常规 FastAPI + Transformers 提升 **200%+**。
-*   **系统稳定性**：支持节点故障自动剔除与请求重试，保证 99.9% 的服务可用性。
-*   **工程价值**：产出一个具有工业级水准的开源代码库，并在简历上填补分布式系统和 ML Infra 的空白。
+#### 第一阶段：Go-Python 分布式基础 (SWE 信号)
+*   实现 Go Gateway，通过 **gRPC 流式传输（Streaming）** 将 Prompt 发送到推理节点。
+*   在 Go 中实现 **Leaky Bucket 算法** 进行流量整形，确保系统不会在瞬间高并发下崩溃。
+
+#### 第二阶段：C++ 显存管理器 (MLSys/Infra 信号 - *最硬核*)
+*   **问题**：Python 的垃圾回收（GC）在高频分配 KV-Cache 时会导致系统卡顿。
+*   **解决**：用 **C++ 实现一个 Block-based Memory Pool**。
+    *   预先分配大块显存，手动管理 Block 的分配与释放（类似 vLLM 的 PagedAttention 思想）。
+    *   通过 **Pybind11** 将此管理器封装给 Python 层的推理循环使用。
+
+#### 第三阶段：C++ 性能加速 (Low-level Engineering 信号)
+*   **多线程 Tokenizer**：使用 C++ 实现并行化的文本编码/解码，消除 Python GIL 带来的延迟。
+*   **Zero-copy 数据传输**：研究并实现如何减少 Tensor 在 CPU 和 GPU 之间的拷贝次数。
+
+#### 第四阶段：系统监控与压测
+*   使用 **Prometheus** 记录每秒处理的 Token 数（TPS）和首字延迟（TTFT）。
+*   使用 **Grafana** 展示 C++ 显存池的利用率曲线。
+
