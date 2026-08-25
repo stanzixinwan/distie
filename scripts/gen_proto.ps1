@@ -34,4 +34,10 @@ python -m grpc_tools.protoc `
   "$PROTO_DIR/inference.proto"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# protoc emits `import inference_pb2`; make it a package-relative import.
+$grpcFile = Join-Path $PY_OUT "inference_pb2_grpc.py"
+$grpcSrc = Get-Content -Raw $grpcFile
+$grpcSrc = $grpcSrc -replace '(?m)^import inference_pb2 as inference__pb2', 'from . import inference_pb2 as inference__pb2'
+Set-Content -Path $grpcFile -Value $grpcSrc -NoNewline
+
 Write-Host "Proto generation complete."
