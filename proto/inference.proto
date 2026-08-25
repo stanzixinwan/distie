@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package omniserve.inference.v1;
 
-option go_package = "omniserve/inferencepb";
+option go_package = "github.com/omniserve/llm_inference_server/proto/gen/go;inferencepb";
 
 // 推理请求
 message InferenceRequest {

@@ -4,19 +4,24 @@
 set -e
 
 PROTO_DIR="proto"
-GO_OUT="proto/gen/go"
 PY_OUT="worker/src/proto_gen"
+MODULE="github.com/omniserve/llm_inference_server"
 
-mkdir -p "$GO_OUT" "$PY_OUT"
+mkdir -p proto/gen/go "$PY_OUT"
 
-# Go 代码生成
-protoc \
-  --proto_path="$PROTO_DIR" \
-  --go_out="$GO_OUT" \
-  --go-grpc_out="$GO_OUT" \
-  "$PROTO_DIR/inference.proto"
+python -c "
+import grpc_tools.protoc, sys
+sys.exit(grpc_tools.protoc.main([
+    '',
+    '--proto_path=${PROTO_DIR}',
+    '--go_out=.',
+    '--go_opt=module=${MODULE}',
+    '--go-grpc_out=.',
+    '--go-grpc_opt=module=${MODULE}',
+    '${PROTO_DIR}/inference.proto',
+]))
+"
 
-# Python 代码生成
 python -m grpc_tools.protoc \
   --proto_path="$PROTO_DIR" \
   --python_out="$PY_OUT" \

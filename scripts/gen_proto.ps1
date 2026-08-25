@@ -3,26 +3,35 @@
 $ErrorActionPreference = "Stop"
 
 $PROTO_DIR = "proto"
-$GO_OUT = "proto/gen/go"
 $PY_OUT = "worker/src/proto_gen"
+$MODULE = "github.com/omniserve/llm_inference_server"
 
-New-Item -ItemType Directory -Force -Path $GO_OUT | Out-Null
+New-Item -ItemType Directory -Force -Path "proto/gen/go" | Out-Null
 New-Item -ItemType Directory -Force -Path $PY_OUT | Out-Null
 
-# Go 代码生成
-Write-Host "Generating Go code..."
-protoc `
-  --proto_path="$PROTO_DIR" `
-  --go_out="$GO_OUT" `
-  --go-grpc_out="$GO_OUT" `
-  "$PROTO_DIR/inference.proto"
+$env:Path += ";$env:USERPROFILE\go\bin"
 
-# Python 代码生成
+Write-Host "Generating Go code..."
+python -c @"
+import grpc_tools.protoc, sys
+sys.exit(grpc_tools.protoc.main([
+    '',
+    '--proto_path=$PROTO_DIR',
+    '--go_out=.',
+    '--go_opt=module=$MODULE',
+    '--go-grpc_out=.',
+    '--go-grpc_opt=module=$MODULE',
+    '$PROTO_DIR/inference.proto',
+]))
+"@
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Host "Generating Python code..."
 python -m grpc_tools.protoc `
   --proto_path="$PROTO_DIR" `
   --python_out="$PY_OUT" `
   --grpc_python_out="$PY_OUT" `
   "$PROTO_DIR/inference.proto"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Proto generation complete."
