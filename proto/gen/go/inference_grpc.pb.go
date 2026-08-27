@@ -19,8 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InferenceService_Infer_FullMethodName       = "/stanzixinwan.inference.v1.InferenceService/Infer"
-	InferenceService_InferStream_FullMethodName = "/stanzixinwan.inference.v1.InferenceService/InferStream"
+	InferenceService_Infer_FullMethodName       = "/distie.inference.v1.InferenceService/Infer"
+	InferenceService_InferStream_FullMethodName = "/distie.inference.v1.InferenceService/InferStream"
 )
 
 // InferenceServiceClient is the client API for InferenceService service.
@@ -152,7 +152,7 @@ type InferenceService_InferStreamServer = grpc.ServerStreamingServer[InferenceRe
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var InferenceService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "stanzixinwan.inference.v1.InferenceService",
+	ServiceName: "distie.inference.v1.InferenceService",
 	HandlerType: (*InferenceServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -171,7 +171,7 @@ var InferenceService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WorkerControl_ReportHealth_FullMethodName = "/stanzixinwan.inference.v1.WorkerControl/ReportHealth"
+	WorkerControl_ReportHealth_FullMethodName = "/distie.inference.v1.WorkerControl/ReportHealth"
 )
 
 // WorkerControlClient is the client API for WorkerControl service.
@@ -258,7 +258,7 @@ type WorkerControl_ReportHealthServer = grpc.BidiStreamingServer[HealthReport, H
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var WorkerControl_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "stanzixinwan.inference.v1.WorkerControl",
+	ServiceName: "distie.inference.v1.WorkerControl",
 	HandlerType: (*WorkerControlServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{

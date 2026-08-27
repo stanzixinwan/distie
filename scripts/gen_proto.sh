@@ -5,7 +5,7 @@ set -e
 
 PROTO_DIR="proto"
 PY_OUT="worker/src/proto_gen"
-MODULE="github.com/stanzixinwan/llm_inference_server"
+MODULE="github.com/stanzixinwan/distie"
 
 mkdir -p proto/gen/go "$PY_OUT"
 

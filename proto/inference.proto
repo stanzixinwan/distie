@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package stanzixinwan.inference.v1;
+package distie.inference.v1;
 
-option go_package = "github.com/stanzixinwan/llm_inference_server/proto/gen/go;inferencepb";
+option go_package = "github.com/stanzixinwan/distie/proto/gen/go;inferencepb";
 
 // 推理请求
 message InferenceRequest {

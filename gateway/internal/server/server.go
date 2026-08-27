@@ -8,8 +8,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/stanzixinwan/llm_inference_server/gateway/internal/handler"
-	pb "github.com/stanzixinwan/llm_inference_server/proto/gen/go"
+	"github.com/stanzixinwan/distie/gateway/internal/handler"
+	pb "github.com/stanzixinwan/distie/proto/gen/go"
 )
 
 // Server wraps a gRPC server and its listener.

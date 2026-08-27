@@ -36,12 +36,12 @@ class InferenceServiceStub:
             channel: A grpc.Channel.
         """
         self.Infer = channel.unary_unary(
-                '/stanzixinwan.inference.v1.InferenceService/Infer',
+                '/distie.inference.v1.InferenceService/Infer',
                 request_serializer=inference__pb2.InferenceRequest.SerializeToString,
                 response_deserializer=inference__pb2.InferenceResponse.FromString,
                 _registered_method=True)
         self.InferStream = channel.unary_stream(
-                '/stanzixinwan.inference.v1.InferenceService/InferStream',
+                '/distie.inference.v1.InferenceService/InferStream',
                 request_serializer=inference__pb2.InferenceRequest.SerializeToString,
                 response_deserializer=inference__pb2.InferenceResponse.FromString,
                 _registered_method=True)
@@ -80,9 +80,9 @@ def add_InferenceServiceServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'stanzixinwan.inference.v1.InferenceService', rpc_method_handlers)
+            'distie.inference.v1.InferenceService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('stanzixinwan.inference.v1.InferenceService', rpc_method_handlers)
+    server.add_registered_method_handlers('distie.inference.v1.InferenceService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -104,7 +104,7 @@ class InferenceService:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/stanzixinwan.inference.v1.InferenceService/Infer',
+            '/distie.inference.v1.InferenceService/Infer',
             inference__pb2.InferenceRequest.SerializeToString,
             inference__pb2.InferenceResponse.FromString,
             options,
@@ -131,7 +131,7 @@ class InferenceService:
         return grpc.experimental.unary_stream(
             request,
             target,
-            '/stanzixinwan.inference.v1.InferenceService/InferStream',
+            '/distie.inference.v1.InferenceService/InferStream',
             inference__pb2.InferenceRequest.SerializeToString,
             inference__pb2.InferenceResponse.FromString,
             options,
@@ -156,7 +156,7 @@ class WorkerControlStub:
             channel: A grpc.Channel.
         """
         self.ReportHealth = channel.stream_stream(
-                '/stanzixinwan.inference.v1.WorkerControl/ReportHealth',
+                '/distie.inference.v1.WorkerControl/ReportHealth',
                 request_serializer=inference__pb2.HealthReport.SerializeToString,
                 response_deserializer=inference__pb2.HealthAck.FromString,
                 _registered_method=True)
@@ -183,9 +183,9 @@ def add_WorkerControlServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'stanzixinwan.inference.v1.WorkerControl', rpc_method_handlers)
+            'distie.inference.v1.WorkerControl', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('stanzixinwan.inference.v1.WorkerControl', rpc_method_handlers)
+    server.add_registered_method_handlers('distie.inference.v1.WorkerControl', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -207,7 +207,7 @@ class WorkerControl:
         return grpc.experimental.stream_stream(
             request_iterator,
             target,
-            '/stanzixinwan.inference.v1.WorkerControl/ReportHealth',
+            '/distie.inference.v1.WorkerControl/ReportHealth',
             inference__pb2.HealthReport.SerializeToString,
             inference__pb2.HealthAck.FromString,
             options,

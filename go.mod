@@ -1,4 +1,4 @@
-module github.com/stanzixinwan/llm_inference_server
+module github.com/stanzixinwan/distie
 
 go 1.25.0
 

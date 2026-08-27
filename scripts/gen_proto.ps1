@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 
 $PROTO_DIR = "proto"
 $PY_OUT = "worker/src/proto_gen"
-$MODULE = "github.com/stanzixinwan/llm_inference_server"
+$MODULE = "github.com/stanzixinwan/distie"
 
 New-Item -ItemType Directory -Force -Path "proto/gen/go" | Out-Null
 New-Item -ItemType Directory -Force -Path $PY_OUT | Out-Null

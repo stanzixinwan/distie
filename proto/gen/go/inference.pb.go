@@ -462,14 +462,14 @@ var File_inference_proto protoreflect.FileDescriptor
 
 const file_inference_proto_rawDesc = "" +
 	"\n" +
-	"\x0finference.proto\x12\x19stanzixinwan.inference.v1\"\xad\x01\n" +
+	"\x0finference.proto\x12\x13distie.inference.v1\"\xa7\x01\n" +
 	"\x10InferenceRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
 	"\n" +
 	"model_name\x18\x02 \x01(\tR\tmodelName\x12\x16\n" +
-	"\x06prompt\x18\x03 \x01(\tR\x06prompt\x12C\n" +
-	"\x06params\x18\x04 \x01(\v2+.stanzixinwan.inference.v1.GenerationParamsR\x06params\"\xc4\x01\n" +
+	"\x06prompt\x18\x03 \x01(\tR\x06prompt\x12=\n" +
+	"\x06params\x18\x04 \x01(\v2%.distie.inference.v1.GenerationParamsR\x06params\"\xc4\x01\n" +
 	"\x10GenerationParams\x12\x1d\n" +
 	"\n" +
 	"max_tokens\x18\x01 \x01(\x05R\tmaxTokens\x12 \n" +
@@ -477,13 +477,13 @@ const file_inference_proto_rawDesc = "" +
 	"\x05top_p\x18\x03 \x01(\x02R\x04topP\x12\x13\n" +
 	"\x05top_k\x18\x04 \x01(\x05R\x04topK\x12-\n" +
 	"\x12repetition_penalty\x18\x05 \x01(\x02R\x11repetitionPenalty\x12\x16\n" +
-	"\x06stream\x18\x06 \x01(\bR\x06stream\"\xa1\x01\n" +
+	"\x06stream\x18\x06 \x01(\bR\x06stream\"\x9b\x01\n" +
 	"\x11InferenceResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\x12\x1a\n" +
-	"\bfinished\x18\x03 \x01(\bR\bfinished\x12;\n" +
-	"\x05usage\x18\x04 \x01(\v2%.stanzixinwan.inference.v1.UsageStatsR\x05usage\"\xdf\x01\n" +
+	"\bfinished\x18\x03 \x01(\bR\bfinished\x125\n" +
+	"\x05usage\x18\x04 \x01(\v2\x1f.distie.inference.v1.UsageStatsR\x05usage\"\xdf\x01\n" +
 	"\n" +
 	"UsageStats\x12#\n" +
 	"\rprompt_tokens\x18\x01 \x01(\x05R\fpromptTokens\x12+\n" +
@@ -501,12 +501,12 @@ const file_inference_proto_rawDesc = "" +
 	"\x0factive_requests\x18\x06 \x01(\x05R\x0eactiveRequests\x12$\n" +
 	"\x0emax_batch_size\x18\a \x01(\x05R\fmaxBatchSize\"'\n" +
 	"\tHealthAck\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted2\xe2\x01\n" +
-	"\x10InferenceService\x12b\n" +
-	"\x05Infer\x12+.stanzixinwan.inference.v1.InferenceRequest\x1a,.stanzixinwan.inference.v1.InferenceResponse\x12j\n" +
-	"\vInferStream\x12+.stanzixinwan.inference.v1.InferenceRequest\x1a,.stanzixinwan.inference.v1.InferenceResponse0\x012r\n" +
-	"\rWorkerControl\x12a\n" +
-	"\fReportHealth\x12'.stanzixinwan.inference.v1.HealthReport\x1a$.stanzixinwan.inference.v1.HealthAck(\x010\x01BGZEgithub.com/stanzixinwan/llm_inference_server/proto/gen/go;inferencepbb\x06proto3"
+	"\baccepted\x18\x01 \x01(\bR\baccepted2\xca\x01\n" +
+	"\x10InferenceService\x12V\n" +
+	"\x05Infer\x12%.distie.inference.v1.InferenceRequest\x1a&.distie.inference.v1.InferenceResponse\x12^\n" +
+	"\vInferStream\x12%.distie.inference.v1.InferenceRequest\x1a&.distie.inference.v1.InferenceResponse0\x012f\n" +
+	"\rWorkerControl\x12U\n" +
+	"\fReportHealth\x12!.distie.inference.v1.HealthReport\x1a\x1e.distie.inference.v1.HealthAck(\x010\x01B9Z7github.com/stanzixinwan/distie/proto/gen/go;inferencepbb\x06proto3"
 
 var (
 	file_inference_proto_rawDescOnce sync.Once
@@ -522,22 +522,22 @@ func file_inference_proto_rawDescGZIP() []byte {
 
 var file_inference_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_inference_proto_goTypes = []any{
-	(*InferenceRequest)(nil),  // 0: stanzixinwan.inference.v1.InferenceRequest
-	(*GenerationParams)(nil),  // 1: stanzixinwan.inference.v1.GenerationParams
-	(*InferenceResponse)(nil), // 2: stanzixinwan.inference.v1.InferenceResponse
-	(*UsageStats)(nil),        // 3: stanzixinwan.inference.v1.UsageStats
-	(*HealthReport)(nil),      // 4: stanzixinwan.inference.v1.HealthReport
-	(*HealthAck)(nil),         // 5: stanzixinwan.inference.v1.HealthAck
+	(*InferenceRequest)(nil),  // 0: distie.inference.v1.InferenceRequest
+	(*GenerationParams)(nil),  // 1: distie.inference.v1.GenerationParams
+	(*InferenceResponse)(nil), // 2: distie.inference.v1.InferenceResponse
+	(*UsageStats)(nil),        // 3: distie.inference.v1.UsageStats
+	(*HealthReport)(nil),      // 4: distie.inference.v1.HealthReport
+	(*HealthAck)(nil),         // 5: distie.inference.v1.HealthAck
 }
 var file_inference_proto_depIdxs = []int32{
-	1, // 0: stanzixinwan.inference.v1.InferenceRequest.params:type_name -> stanzixinwan.inference.v1.GenerationParams
-	3, // 1: stanzixinwan.inference.v1.InferenceResponse.usage:type_name -> stanzixinwan.inference.v1.UsageStats
-	0, // 2: stanzixinwan.inference.v1.InferenceService.Infer:input_type -> stanzixinwan.inference.v1.InferenceRequest
-	0, // 3: stanzixinwan.inference.v1.InferenceService.InferStream:input_type -> stanzixinwan.inference.v1.InferenceRequest
-	4, // 4: stanzixinwan.inference.v1.WorkerControl.ReportHealth:input_type -> stanzixinwan.inference.v1.HealthReport
-	2, // 5: stanzixinwan.inference.v1.InferenceService.Infer:output_type -> stanzixinwan.inference.v1.InferenceResponse
-	2, // 6: stanzixinwan.inference.v1.InferenceService.InferStream:output_type -> stanzixinwan.inference.v1.InferenceResponse
-	5, // 7: stanzixinwan.inference.v1.WorkerControl.ReportHealth:output_type -> stanzixinwan.inference.v1.HealthAck
+	1, // 0: distie.inference.v1.InferenceRequest.params:type_name -> distie.inference.v1.GenerationParams
+	3, // 1: distie.inference.v1.InferenceResponse.usage:type_name -> distie.inference.v1.UsageStats
+	0, // 2: distie.inference.v1.InferenceService.Infer:input_type -> distie.inference.v1.InferenceRequest
+	0, // 3: distie.inference.v1.InferenceService.InferStream:input_type -> distie.inference.v1.InferenceRequest
+	4, // 4: distie.inference.v1.WorkerControl.ReportHealth:input_type -> distie.inference.v1.HealthReport
+	2, // 5: distie.inference.v1.InferenceService.Infer:output_type -> distie.inference.v1.InferenceResponse
+	2, // 6: distie.inference.v1.InferenceService.InferStream:output_type -> distie.inference.v1.InferenceResponse
+	5, // 7: distie.inference.v1.WorkerControl.ReportHealth:output_type -> distie.inference.v1.HealthAck
 	5, // [5:8] is the sub-list for method output_type
 	2, // [2:5] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name

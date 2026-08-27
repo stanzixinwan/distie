@@ -3,7 +3,7 @@
 ---
 
 # 项目提案基于 C++/Go 的分布式高性能推理引擎
-**Project Proposal: Distributed Inference Engine with C++ Performance Core**
+**Project Proposal: DistIE: Distributed Inference Engine with C++ Performance Core**
 
 ### 1. 项目愿景 (Objective)
 构建一个支持多机多卡、低延迟、高吞吐的 LLM 推理系统。通过 **Go 处理高并发网络请求**，**C++ 负责底层内存与算子优化**，**Python 进行模型逻辑编排**，实现一个完整的生产级高性能系统。
