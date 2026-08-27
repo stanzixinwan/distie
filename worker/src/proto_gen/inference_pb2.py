@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0finference.proto\x12\x16omniserve.inference.v1\"\x84\x01\n\x10InferenceRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x12\n\nmodel_name\x18\x02 \x01(\t\x12\x0e\n\x06prompt\x18\x03 \x01(\t\x12\x38\n\x06params\x18\x04 \x01(\x0b\x32(.omniserve.inference.v1.GenerationParams\"\x85\x01\n\x10GenerationParams\x12\x12\n\nmax_tokens\x18\x01 \x01(\x05\x12\x13\n\x0btemperature\x18\x02 \x01(\x02\x12\r\n\x05top_p\x18\x03 \x01(\x02\x12\r\n\x05top_k\x18\x04 \x01(\x05\x12\x1a\n\x12repetition_penalty\x18\x05 \x01(\x02\x12\x0e\n\x06stream\x18\x06 \x01(\x08\"{\n\x11InferenceResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\r\n\x05token\x18\x02 \x01(\t\x12\x10\n\x08\x66inished\x18\x03 \x01(\x08\x12\x31\n\x05usage\x18\x04 \x01(\x0b\x32\".omniserve.inference.v1.UsageStats\"\x8e\x01\n\nUsageStats\x12\x15\n\rprompt_tokens\x18\x01 \x01(\x05\x12\x19\n\x11\x63ompletion_tokens\x18\x02 \x01(\x05\x12\x14\n\x0ctotal_tokens\x18\x03 \x01(\x05\x12\x1e\n\x16time_to_first_token_ms\x18\x04 \x01(\x02\x12\x18\n\x10total_latency_ms\x18\x05 \x01(\x02\"\xb8\x01\n\x0cHealthReport\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x12\n\nmodel_name\x18\x02 \x01(\t\x12\x1a\n\x12gpu_memory_used_mb\x18\x03 \x01(\x02\x12\x1b\n\x13gpu_memory_total_mb\x18\x04 \x01(\x02\x12\x17\n\x0fgpu_utilization\x18\x05 \x01(\x02\x12\x17\n\x0f\x61\x63tive_requests\x18\x06 \x01(\x05\x12\x16\n\x0emax_batch_size\x18\x07 \x01(\x05\"\x1d\n\tHealthAck\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x32\xd6\x01\n\x10InferenceService\x12\\\n\x05Infer\x12(.omniserve.inference.v1.InferenceRequest\x1a).omniserve.inference.v1.InferenceResponse\x12\x64\n\x0bInferStream\x12(.omniserve.inference.v1.InferenceRequest\x1a).omniserve.inference.v1.InferenceResponse0\x01\x32l\n\rWorkerControl\x12[\n\x0cReportHealth\x12$.omniserve.inference.v1.HealthReport\x1a!.omniserve.inference.v1.HealthAck(\x01\x30\x01\x42GZEgithub.com/stanzixinwan/llm_inference_server/proto/gen/go;inferencepbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0finference.proto\x12\x19stanzixinwan.inference.v1\"\x87\x01\n\x10InferenceRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x12\n\nmodel_name\x18\x02 \x01(\t\x12\x0e\n\x06prompt\x18\x03 \x01(\t\x12;\n\x06params\x18\x04 \x01(\x0b\x32+.stanzixinwan.inference.v1.GenerationParams\"\x85\x01\n\x10GenerationParams\x12\x12\n\nmax_tokens\x18\x01 \x01(\x05\x12\x13\n\x0btemperature\x18\x02 \x01(\x02\x12\r\n\x05top_p\x18\x03 \x01(\x02\x12\r\n\x05top_k\x18\x04 \x01(\x05\x12\x1a\n\x12repetition_penalty\x18\x05 \x01(\x02\x12\x0e\n\x06stream\x18\x06 \x01(\x08\"~\n\x11InferenceResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\r\n\x05token\x18\x02 \x01(\t\x12\x10\n\x08\x66inished\x18\x03 \x01(\x08\x12\x34\n\x05usage\x18\x04 \x01(\x0b\x32%.stanzixinwan.inference.v1.UsageStats\"\x8e\x01\n\nUsageStats\x12\x15\n\rprompt_tokens\x18\x01 \x01(\x05\x12\x19\n\x11\x63ompletion_tokens\x18\x02 \x01(\x05\x12\x14\n\x0ctotal_tokens\x18\x03 \x01(\x05\x12\x1e\n\x16time_to_first_token_ms\x18\x04 \x01(\x02\x12\x18\n\x10total_latency_ms\x18\x05 \x01(\x02\"\xb8\x01\n\x0cHealthReport\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x12\n\nmodel_name\x18\x02 \x01(\t\x12\x1a\n\x12gpu_memory_used_mb\x18\x03 \x01(\x02\x12\x1b\n\x13gpu_memory_total_mb\x18\x04 \x01(\x02\x12\x17\n\x0fgpu_utilization\x18\x05 \x01(\x02\x12\x17\n\x0f\x61\x63tive_requests\x18\x06 \x01(\x05\x12\x16\n\x0emax_batch_size\x18\x07 \x01(\x05\"\x1d\n\tHealthAck\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x32\xe2\x01\n\x10InferenceService\x12\x62\n\x05Infer\x12+.stanzixinwan.inference.v1.InferenceRequest\x1a,.stanzixinwan.inference.v1.InferenceResponse\x12j\n\x0bInferStream\x12+.stanzixinwan.inference.v1.InferenceRequest\x1a,.stanzixinwan.inference.v1.InferenceResponse0\x01\x32r\n\rWorkerControl\x12\x61\n\x0cReportHealth\x12\'.stanzixinwan.inference.v1.HealthReport\x1a$.stanzixinwan.inference.v1.HealthAck(\x01\x30\x01\x42GZEgithub.com/stanzixinwan/llm_inference_server/proto/gen/go;inferencepbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,20 +32,20 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'inference_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZEgithub.com/stanzixinwan/llm_inference_server/proto/gen/go;inferencepb'
-  _globals['_INFERENCEREQUEST']._serialized_start=44
-  _globals['_INFERENCEREQUEST']._serialized_end=176
-  _globals['_GENERATIONPARAMS']._serialized_start=179
-  _globals['_GENERATIONPARAMS']._serialized_end=312
-  _globals['_INFERENCERESPONSE']._serialized_start=314
-  _globals['_INFERENCERESPONSE']._serialized_end=437
-  _globals['_USAGESTATS']._serialized_start=440
-  _globals['_USAGESTATS']._serialized_end=582
-  _globals['_HEALTHREPORT']._serialized_start=585
-  _globals['_HEALTHREPORT']._serialized_end=769
-  _globals['_HEALTHACK']._serialized_start=771
-  _globals['_HEALTHACK']._serialized_end=800
-  _globals['_INFERENCESERVICE']._serialized_start=803
-  _globals['_INFERENCESERVICE']._serialized_end=1017
-  _globals['_WORKERCONTROL']._serialized_start=1019
-  _globals['_WORKERCONTROL']._serialized_end=1127
+  _globals['_INFERENCEREQUEST']._serialized_start=47
+  _globals['_INFERENCEREQUEST']._serialized_end=182
+  _globals['_GENERATIONPARAMS']._serialized_start=185
+  _globals['_GENERATIONPARAMS']._serialized_end=318
+  _globals['_INFERENCERESPONSE']._serialized_start=320
+  _globals['_INFERENCERESPONSE']._serialized_end=446
+  _globals['_USAGESTATS']._serialized_start=449
+  _globals['_USAGESTATS']._serialized_end=591
+  _globals['_HEALTHREPORT']._serialized_start=594
+  _globals['_HEALTHREPORT']._serialized_end=778
+  _globals['_HEALTHACK']._serialized_start=780
+  _globals['_HEALTHACK']._serialized_end=809
+  _globals['_INFERENCESERVICE']._serialized_start=812
+  _globals['_INFERENCESERVICE']._serialized_end=1038
+  _globals['_WORKERCONTROL']._serialized_start=1040
+  _globals['_WORKERCONTROL']._serialized_end=1154
 # @@protoc_insertion_point(module_scope)

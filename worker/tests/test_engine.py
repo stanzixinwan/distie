@@ -13,7 +13,7 @@ from inference.engine import DEFAULT_MAX_TOKENS, FakeEngine, GenerateRequest, to
 
 class TokenizeTest(unittest.TestCase):
     def test_splits_on_whitespace(self) -> None:
-        self.assertEqual(tokenize("hello world from omniserve"), ["hello", "world", "from", "omniserve"])
+        self.assertEqual(tokenize("hello world from stan"), ["hello", "world", "from", "stan"])
 
     def test_collapses_extra_space(self) -> None:
         self.assertEqual(tokenize("  a   b  "), ["a", "b"])
