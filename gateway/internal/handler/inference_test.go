@@ -8,8 +8,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/omniserve/llm_inference_server/gateway/internal/handler"
-	pb "github.com/omniserve/llm_inference_server/proto/gen/go"
+	"github.com/stanzixinwan/llm_inference_server/gateway/internal/handler"
+	pb "github.com/stanzixinwan/llm_inference_server/proto/gen/go"
 )
 
 func TestInfer_RequiresPrompt(t *testing.T) {

@@ -13,17 +13,17 @@ class Config:
 
 
 def load() -> Config:
-    grace = _env_float("OMNISERVE_WORKER_SHUTDOWN_GRACE_SEC", 5.0)
+    grace = _env_float("WORKER_SHUTDOWN_GRACE_SEC", 5.0)
     if grace <= 0:
-        raise ValueError("OMNISERVE_WORKER_SHUTDOWN_GRACE_SEC must be > 0")
+        raise ValueError("WORKER_SHUTDOWN_GRACE_SEC must be > 0")
 
-    delay_ms = _env_float("OMNISERVE_FAKE_TOKEN_DELAY_MS", 0.0)
+    delay_ms = _env_float("FAKE_TOKEN_DELAY_MS", 0.0)
     if delay_ms < 0:
-        raise ValueError("OMNISERVE_FAKE_TOKEN_DELAY_MS must be >= 0")
+        raise ValueError("FAKE_TOKEN_DELAY_MS must be >= 0")
 
     return Config(
-        listen_addr=os.getenv("OMNISERVE_WORKER_LISTEN_ADDR", ":50052"),
-        worker_id=os.getenv("OMNISERVE_WORKER_ID", "worker-1"),
+        listen_addr=os.getenv("WORKER_LISTEN_ADDR", ":50052"),
+        worker_id=os.getenv("WORKER_ID", "worker-1"),
         shutdown_grace_s=grace,
         token_delay_s=delay_ms / 1000.0,
     )

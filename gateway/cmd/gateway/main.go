@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/omniserve/llm_inference_server/gateway/internal/config"
-	"github.com/omniserve/llm_inference_server/gateway/internal/handler"
-	"github.com/omniserve/llm_inference_server/gateway/internal/server"
+	"github.com/stanzixinwan/llm_inference_server/gateway/internal/config"
+	"github.com/stanzixinwan/llm_inference_server/gateway/internal/handler"
+	"github.com/stanzixinwan/llm_inference_server/gateway/internal/server"
 )
 
 func main() {

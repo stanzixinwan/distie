@@ -7,7 +7,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/omniserve/llm_inference_server/proto/gen/go"
+	pb "github.com/stanzixinwan/llm_inference_server/proto/gen/go"
 )
 
 // InferenceHandler implements InferenceService.

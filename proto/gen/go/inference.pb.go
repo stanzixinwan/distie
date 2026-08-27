@@ -506,7 +506,7 @@ const file_inference_proto_rawDesc = "" +
 	"\x05Infer\x12(.omniserve.inference.v1.InferenceRequest\x1a).omniserve.inference.v1.InferenceResponse\x12d\n" +
 	"\vInferStream\x12(.omniserve.inference.v1.InferenceRequest\x1a).omniserve.inference.v1.InferenceResponse0\x012l\n" +
 	"\rWorkerControl\x12[\n" +
-	"\fReportHealth\x12$.omniserve.inference.v1.HealthReport\x1a!.omniserve.inference.v1.HealthAck(\x010\x01BDZBgithub.com/omniserve/llm_inference_server/proto/gen/go;inferencepbb\x06proto3"
+	"\fReportHealth\x12$.omniserve.inference.v1.HealthReport\x1a!.omniserve.inference.v1.HealthAck(\x010\x01BGZEgithub.com/stanzixinwan/llm_inference_server/proto/gen/go;inferencepbb\x06proto3"
 
 var (
 	file_inference_proto_rawDescOnce sync.Once
