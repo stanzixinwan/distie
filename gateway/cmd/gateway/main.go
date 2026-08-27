@@ -10,6 +10,7 @@ import (
 
 	"github.com/stanzixinwan/distie/gateway/internal/config"
 	"github.com/stanzixinwan/distie/gateway/internal/handler"
+	"github.com/stanzixinwan/distie/gateway/internal/ratelimit"
 	"github.com/stanzixinwan/distie/gateway/internal/server"
 	"github.com/stanzixinwan/distie/gateway/internal/upstream"
 )
@@ -41,8 +42,21 @@ func main() {
 		log.Info("upstream worker configured", "addr", cfg.WorkerAddr)
 	}
 
+	var limiter *ratelimit.Bucket
+	if cfg.RateLimitRPS > 0 {
+		limiter, err = ratelimit.New(cfg.RateLimitRPS, cfg.RateLimitBurst)
+		if err != nil {
+			log.Error("create rate limiter", "err", err)
+			os.Exit(1)
+		}
+		log.Info("rate limit enabled",
+			"rps", cfg.RateLimitRPS,
+			"burst", cfg.RateLimitBurst,
+		)
+	}
+
 	h := handler.NewInferenceHandler(log, up)
-	srv, err := server.New(cfg.ListenAddr, h, log)
+	srv, err := server.New(cfg.ListenAddr, h, log, limiter)
 	if err != nil {
 		log.Error("create server", "err", err)
 		os.Exit(1)

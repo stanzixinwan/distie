@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	"github.com/stanzixinwan/distie/gateway/internal/handler"
+	"github.com/stanzixinwan/distie/gateway/internal/ratelimit"
 	pb "github.com/stanzixinwan/distie/proto/gen/go"
 )
 
@@ -21,7 +22,8 @@ type Server struct {
 }
 
 // New creates a gRPC server that serves InferenceService on addr.
-func New(addr string, h *handler.InferenceHandler, log *slog.Logger) (*Server, error) {
+// limiter may be nil, which disables rate limiting.
+func New(addr string, h *handler.InferenceHandler, log *slog.Logger, limiter *ratelimit.Bucket) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -34,9 +36,17 @@ func New(addr string, h *handler.InferenceHandler, log *slog.Logger) (*Server, e
 		return nil, fmt.Errorf("listen %s: %w", addr, err)
 	}
 
+	unary := []grpc.UnaryServerInterceptor{unaryLoggingInterceptor(log)}
+	stream := []grpc.StreamServerInterceptor{streamLoggingInterceptor(log)}
+	if limiter != nil {
+		// Logging is outermost so rejected RPCs still get a status line.
+		unary = append(unary, ratelimit.UnaryInterceptor(limiter))
+		stream = append(stream, ratelimit.StreamInterceptor(limiter))
+	}
+
 	grpcSrv := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(unaryLoggingInterceptor(log)),
-		grpc.ChainStreamInterceptor(streamLoggingInterceptor(log)),
+		grpc.ChainUnaryInterceptor(unary...),
+		grpc.ChainStreamInterceptor(stream...),
 	)
 
 	pb.RegisterInferenceServiceServer(grpcSrv, h)
