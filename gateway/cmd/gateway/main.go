@@ -11,6 +11,7 @@ import (
 	"github.com/stanzixinwan/distie/gateway/internal/config"
 	"github.com/stanzixinwan/distie/gateway/internal/handler"
 	"github.com/stanzixinwan/distie/gateway/internal/server"
+	"github.com/stanzixinwan/distie/gateway/internal/upstream"
 )
 
 func main() {
@@ -24,7 +25,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	h := handler.NewInferenceHandler(log)
+	var up upstream.Forwarder
+	if cfg.WorkerAddr != "" {
+		client, dialErr := upstream.Dial(cfg.WorkerAddr)
+		if dialErr != nil {
+			log.Error("dial worker", "addr", cfg.WorkerAddr, "err", dialErr)
+			os.Exit(1)
+		}
+		defer func() {
+			if closeErr := client.Close(); closeErr != nil {
+				log.Error("close worker connection", "err", closeErr)
+			}
+		}()
+		up = client
+		log.Info("upstream worker configured", "addr", cfg.WorkerAddr)
+	}
+
+	h := handler.NewInferenceHandler(log, up)
 	srv, err := server.New(cfg.ListenAddr, h, log)
 	if err != nil {
 		log.Error("create server", "err", err)
