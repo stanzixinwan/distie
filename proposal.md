@@ -32,7 +32,7 @@
 *   实现 Go Gateway，通过 **gRPC 流式传输（Streaming）** 将 Prompt 发送到推理节点。
 *   在 Go 中实现 **Leaky Bucket 算法** 进行流量整形，确保系统不会在瞬间高并发下崩溃。
 
-#### 第二阶段：C++ 显存管理器 (MLSys/Infra 信号 - *最硬核*)
+#### 第二阶段：C++ 显存管理器 (MLSys/Infra 信号)
 *   **问题**：Python 的垃圾回收（GC）在高频分配 KV-Cache 时会导致系统卡顿。
 *   **解决**：用 **C++ 实现一个 Block-based Memory Pool**。
     *   预先分配大块显存，手动管理 Block 的分配与释放（类似 vLLM 的 PagedAttention 思想）。

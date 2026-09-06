@@ -1,0 +1,22 @@
+# Python
+**/__pycache__/
+*.py[cod]
+.venv/
+
+# C++ / CMake
+core/build/
+cmake-build-*/
+CMakeUserPresets.json
+
+# Native extension artifacts
+*.pyd
+*.so
+*.dll
+*.exp
+*.lib
+*.pdb
+*.obj
+*.ilk
+
+# Local binaries
+bin/
