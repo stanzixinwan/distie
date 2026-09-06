@@ -4,7 +4,12 @@ import logging
 
 import grpc
 
-from inference.engine import FakeEngine, GenerateRequest, TokenEvent
+from inference.engine import (
+    BlockPoolExhausted,
+    FakeEngine,
+    GenerateRequest,
+    TokenEvent,
+)
 from proto_gen import inference_pb2, inference_pb2_grpc
 
 _log = logging.getLogger(__name__)
@@ -73,11 +78,19 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
             max_tokens=request.params.max_tokens,
         )
 
-        async for event in self._engine.generate(gen_req):
-            if context.cancelled():
-                self._log.info("generate cancelled request_id=%s", request.request_id)
-                return
-            yield _to_response(request.request_id, event)
+        try:
+            async for event in self._engine.generate(gen_req):
+                if context.cancelled():
+                    self._log.info("generate cancelled request_id=%s", request.request_id)
+                    return
+                yield _to_response(request.request_id, event)
+        except BlockPoolExhausted as exc:
+            self._log.warning(
+                "block pool exhausted request_id=%s err=%s",
+                request.request_id,
+                exc,
+            )
+            await context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, str(exc))
 
 
 def _validate(request: inference_pb2.InferenceRequest) -> str | None:

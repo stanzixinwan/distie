@@ -8,7 +8,15 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from inference.engine import DEFAULT_MAX_TOKENS, FakeEngine, GenerateRequest, tokenize
+from inference.engine import (
+    DEFAULT_MAX_TOKENS,
+    TOKENS_PER_BLOCK,
+    BlockPoolExhausted,
+    FakeEngine,
+    GenerateRequest,
+    tokenize,
+)
+from recording_pool import RecordingPool
 
 
 class TokenizeTest(unittest.TestCase):
@@ -71,6 +79,62 @@ class FakeEngineTest(unittest.IsolatedAsyncioTestCase):
             )
         ]
         self.assertEqual(len(events), DEFAULT_MAX_TOKENS)
+
+    async def test_reserves_and_releases_blocks(self) -> None:
+        pool = RecordingPool()
+        engine = FakeEngine(pool=pool)
+        events = [
+            event
+            async for event in engine.generate(
+                GenerateRequest(
+                    request_id="r1",
+                    model_name="fake",
+                    prompt="a b c d e",
+                    max_tokens=8,
+                )
+            )
+        ]
+        self.assertEqual(len(events), 5)
+        self.assertEqual(len(pool.allocated), 1)
+        self.assertEqual(len(pool.allocated[0]), 2)  # 5 tokens / 4 per block
+        self.assertEqual(pool.freed, pool.allocated)
+        self.assertEqual(pool.num_free, 16)
+        self.assertEqual(pool.block_view(pool.allocated[0][0])[0], 5)
+
+    async def test_releases_blocks_on_cancel(self) -> None:
+        pool = RecordingPool()
+        engine = FakeEngine(pool=pool)
+        agen = engine.generate(
+            GenerateRequest(
+                request_id="r1",
+                model_name="fake",
+                prompt="one two three",
+                max_tokens=8,
+            )
+        )
+        first = await agen.__anext__()
+        self.assertEqual(first.token, "one")
+        self.assertEqual(len(pool.allocated), 1)
+        self.assertEqual(len(pool.freed), 0)
+        await agen.aclose()
+        self.assertEqual(pool.freed, pool.allocated)
+        self.assertEqual(pool.num_free, 16)
+
+    async def test_exhausted_pool_raises(self) -> None:
+        pool = RecordingPool(num_blocks=1)
+        engine = FakeEngine(pool=pool)
+        with self.assertRaises(BlockPoolExhausted):
+            async for _ in engine.generate(
+                GenerateRequest(
+                    request_id="r1",
+                    model_name="fake",
+                    prompt="a b c d e",
+                    max_tokens=8,
+                )
+            ):
+                pass
+        self.assertEqual(pool.freed, [])
+        self.assertEqual(TOKENS_PER_BLOCK, 4)
 
 
 if __name__ == "__main__":

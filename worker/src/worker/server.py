@@ -6,6 +6,7 @@ import grpc
 from grpc_reflection.v1alpha import reflection
 
 from inference.engine import FakeEngine
+from inference.native import load_block_pool
 from proto_gen import inference_pb2, inference_pb2_grpc
 from worker.config import Config
 from worker.servicer import InferenceServicer
@@ -17,7 +18,16 @@ def build_server(
     cfg: Config, engine: FakeEngine | None = None
 ) -> tuple[grpc.aio.Server, int]:
     if engine is None:
-        engine = FakeEngine(token_delay_s=cfg.token_delay_s)
+        pool = None
+        if cfg.block_pool_enabled:
+            pool = load_block_pool(cfg.num_blocks, cfg.block_size_bytes)
+            _log.info(
+                "block pool ready worker_id=%s num_blocks=%s block_size_bytes=%s",
+                cfg.worker_id,
+                cfg.num_blocks,
+                cfg.block_size_bytes,
+            )
+        engine = FakeEngine(token_delay_s=cfg.token_delay_s, pool=pool)
 
     server = grpc.aio.server()
     inference_pb2_grpc.add_InferenceServiceServicer_to_server(
