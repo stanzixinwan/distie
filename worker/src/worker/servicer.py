@@ -6,7 +6,7 @@ import grpc
 
 from inference.engine import (
     BlockPoolExhausted,
-    FakeEngine,
+    Engine,
     GenerateRequest,
     TokenEvent,
 )
@@ -16,13 +16,13 @@ _log = logging.getLogger(__name__)
 
 
 class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
-    """gRPC adapter: Protobuf <-> FakeEngine.
+    """gRPC adapter: Protobuf <-> Engine.
 
-    No model logic lives here. That stays in inference.engine so we can
-    later swap in a Torch engine without rewriting the RPC layer.
+    No model logic lives here. FakeEngine or TorchEngine can be injected
+    as long as they yield TokenEvent.
     """
 
-    def __init__(self, engine: FakeEngine, logger: logging.Logger | None = None) -> None:
+    def __init__(self, engine: Engine, logger: logging.Logger | None = None) -> None:
         self._engine = engine
         self._log = logger or _log
 
@@ -76,6 +76,7 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
             model_name=request.model_name,
             prompt=request.prompt,
             max_tokens=request.params.max_tokens,
+            temperature=request.params.temperature,
         )
 
         try:

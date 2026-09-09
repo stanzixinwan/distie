@@ -1,9 +1,7 @@
-"""Fake generation engine.
+"""Shared inference contracts and the fake echo engine.
 
-Does not load a real LM. Echoes the prompt as a token stream so we can
-prove gRPC streaming, cancellation, and C++ BlockPool checkout. Swap this
-module for a Torch engine later; the servicer keeps the same
-GenerateRequest / TokenEvent contract.
+Servicer talks only to Engine.generate → TokenEvent. FakeEngine echoes
+whitespace tokens; TorchEngine (torch_engine.py) runs a real LM.
 """
 
 from __future__ import annotations
@@ -37,12 +35,19 @@ class BlockAllocator(Protocol):
     def block_view(self, block_id: int) -> memoryview: ...
 
 
+class Engine(Protocol):
+    """Anything the servicer can stream tokens from."""
+
+    def generate(self, req: GenerateRequest) -> AsyncIterator[TokenEvent]: ...
+
+
 @dataclass(frozen=True)
 class GenerateRequest:
     request_id: str
     model_name: str
     prompt: str
     max_tokens: int
+    temperature: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -75,13 +80,13 @@ class FakeEngine:
         started = time.perf_counter()
         pieces = tokenize(req.prompt)
         prompt_tokens = len(pieces)
-        cap = _clamp_max_tokens(req.max_tokens)
+        cap = clamp_max_tokens(req.max_tokens)
         emitted = pieces[:cap]
         ttft_ms = 0.0
         block_ids: list[int] = []
 
         try:
-            block_ids = self._reserve_blocks(req.request_id, len(emitted))
+            block_ids = reserve_blocks(self._pool, req.request_id, len(emitted))
 
             if not emitted:
                 now = time.perf_counter()
@@ -111,50 +116,56 @@ class FakeEngine:
                     total_latency_ms=_elapsed_ms(started, now) if finished else 0.0,
                 )
         finally:
-            self._release_blocks(req.request_id, block_ids)
+            release_blocks(self._pool, req.request_id, block_ids)
 
-    def _reserve_blocks(self, request_id: str, token_count: int) -> list[int]:
-        if self._pool is None or token_count == 0:
-            return []
-        needed = (token_count + TOKENS_PER_BLOCK - 1) // TOKENS_PER_BLOCK
-        try:
-            ids = list(self._pool.allocate(needed))
-        except RuntimeError as exc:
-            raise BlockPoolExhausted(
-                f"out of KV blocks: requested {needed} ({exc})"
-            ) from exc
-        self._touch_pages(ids, token_count)
-        _log.info(
-            "kv blocks reserved request_id=%s count=%s ids=%s",
+
+def reserve_blocks(
+    pool: BlockAllocator | None, request_id: str, token_count: int
+) -> list[int]:
+    if pool is None or token_count == 0:
+        return []
+    needed = (token_count + TOKENS_PER_BLOCK - 1) // TOKENS_PER_BLOCK
+    try:
+        ids = list(pool.allocate(needed))
+    except RuntimeError as exc:
+        raise BlockPoolExhausted(
+            f"out of KV blocks: requested {needed} ({exc})"
+        ) from exc
+    _touch_pages(pool, ids, token_count)
+    _log.info(
+        "kv blocks reserved request_id=%s count=%s ids=%s",
+        request_id,
+        needed,
+        ids,
+    )
+    return ids
+
+
+def _touch_pages(pool: BlockAllocator, ids: list[int], token_count: int) -> None:
+    if not ids:
+        return
+    view = pool.block_view(ids[0])
+    view[0] = min(token_count, 255)
+
+
+def release_blocks(
+    pool: BlockAllocator | None, request_id: str, ids: list[int]
+) -> None:
+    if pool is None or not ids:
+        return
+    try:
+        pool.free(ids)
+    except Exception:
+        _log.exception(
+            "failed to free kv blocks request_id=%s ids=%s",
             request_id,
-            needed,
             ids,
         )
-        return ids
-
-    def _touch_pages(self, ids: list[int], token_count: int) -> None:
-        """Write a tiny marker so we actually use the C++ arena, not just IDs."""
-        if self._pool is None or not ids:
-            return
-        view = self._pool.block_view(ids[0])
-        view[0] = min(token_count, 255)
-
-    def _release_blocks(self, request_id: str, ids: list[int]) -> None:
-        if self._pool is None or not ids:
-            return
-        try:
-            self._pool.free(ids)
-        except Exception:
-            _log.exception(
-                "failed to free kv blocks request_id=%s ids=%s",
-                request_id,
-                ids,
-            )
-            return
-        _log.info("kv blocks released request_id=%s count=%s", request_id, len(ids))
+        return
+    _log.info("kv blocks released request_id=%s count=%s", request_id, len(ids))
 
 
-def _clamp_max_tokens(max_tokens: int) -> int:
+def clamp_max_tokens(max_tokens: int) -> int:
     if max_tokens <= 0:
         return DEFAULT_MAX_TOKENS
     return min(max_tokens, HARD_MAX_TOKENS)
