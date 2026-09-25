@@ -17,4 +17,5 @@
 | 2026-09-06 | TorchEngine：默认 Qwen2.5-1.5B-Instruct，CUDA fp16 逐 token 流式生成；KV 仍由 PyTorch 管。`WORKER_ENGINE=fake` 可回退。|
 | 2026-09-06 | Windows 用 cu128 轮子装 GPU 版 torch（PyPI 默认常为 `+cpu`）。|
 | 2026-09-09 | .cursorrules：每次改动最短记入 `devlog.md`。|
+| 2026-09-09 | PagedKvCache：C++ Block ID 当页表，torch 槽位存 KV；TorchEngine scatter/gather，HF cache 不再是唯一存储。|
 

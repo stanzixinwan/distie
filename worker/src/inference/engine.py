@@ -120,11 +120,16 @@ class FakeEngine:
 
 
 def reserve_blocks(
-    pool: BlockAllocator | None, request_id: str, token_count: int
+    pool: BlockAllocator | None,
+    request_id: str,
+    token_count: int,
+    tokens_per_block: int = TOKENS_PER_BLOCK,
 ) -> list[int]:
     if pool is None or token_count == 0:
         return []
-    needed = (token_count + TOKENS_PER_BLOCK - 1) // TOKENS_PER_BLOCK
+    if tokens_per_block < 1:
+        raise ValueError("tokens_per_block must be >= 1")
+    needed = (token_count + tokens_per_block - 1) // tokens_per_block
     try:
         ids = list(pool.allocate(needed))
     except RuntimeError as exc:

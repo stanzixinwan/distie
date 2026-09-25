@@ -5,6 +5,7 @@ class RecordingPool:
     """In-memory BlockAllocator for tests. Same methods as distie_core.BlockPool."""
 
     def __init__(self, num_blocks: int = 16, block_size: int = 8) -> None:
+        self.num_blocks = num_blocks
         self._free = list(range(num_blocks - 1, -1, -1))
         self._data = {i: bytearray(block_size) for i in range(num_blocks)}
         self.allocated: list[list[int]] = []
