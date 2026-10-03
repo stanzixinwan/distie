@@ -1,7 +1,3 @@
-这份重新设计的 Proposal 将项目提升到了**工业级推理框架（如 vLLM, TGI, TensorRT-LLM）**的深度。
-
----
-
 # 项目提案基于 C++/Go 的分布式高性能推理引擎
 **Project Proposal: DistIE: Distributed Inference Engine with C++ Performance Core**
 
