@@ -2,6 +2,7 @@
 **/__pycache__/
 *.py[cod]
 .venv/
+*.pyc
 
 # C++ / CMake
 core/build/
@@ -20,3 +21,15 @@ CMakeUserPresets.json
 
 # Local binaries
 bin/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
