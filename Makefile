@@ -1,3 +1,11 @@
+VENV := $(CURDIR)/.venv
+# Make 3.81 (macOS) resolves metachar-free recipes with its startup PATH,
+# so PYTHON must be absolute; the PATH export still reaches child scripts.
+ifneq ($(wildcard $(VENV)/bin/python),)
+export PATH := $(VENV)/bin:$(PATH)
+PYTHON ?= $(VENV)/bin/python
+endif
+
 PYTHON ?= python3
 export PYTHON
 
@@ -12,9 +20,12 @@ RATE ?= inf
 SHAREGPT := benchmarks/data/ShareGPT_V3_unfiltered_cleaned_split.json
 SHAREGPT_URL := https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 
-.PHONY: all proto core gateway test test-go test-worker test-bench correctness bench sharegpt clean
+.PHONY: all setup proto core gateway test test-go test-worker test-bench correctness bench sharegpt clean
 
 all: proto core gateway
+
+setup:
+	bash scripts/setup_dev.sh
 
 proto:
 	bash scripts/gen_proto.sh

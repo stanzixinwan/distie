@@ -21,4 +21,5 @@
 | 2026-10-03 | 仓库清理：删 `bin/gateway.exe` 与 `.ps1`，新增 `build_core.sh` + 顶层 `Makefile`；C++ `BlockPool` 去掉 arena/`block_view`，只管块 ID；proposal 统一称 Gateway。|
 | 2026-10-03 | 正确性测试：`benchmarks/correctness/hf_parity.py` 对比分页 KV 路径与 HF `generate`（贪心 token 一致 + teacher-forced top-1/logits 误差），`make correctness`；`TorchEngine` 加 `trace()` 与 `dtype`；修复 transformers 5 下 `DynamicCache` 构造崩溃，依赖升至 `>=5.0`。|
 | 2026-10-03 | 压测：`benchmarks/load/` 开环 Poisson 到达的 gRPC 客户端，ShareGPT / synthetic 负载，输出 TTFT/TPOT/E2E p50/p90/p99 与吞吐；`make sharegpt`、`make bench`。|
+| 2026-10-03 | 开发环境：`make setup`（uv 建 `.venv` + cmake/ninja + protoc Go 插件）；Makefile 自动使用 `.venv`（绝对路径，兼容 macOS Make 3.81）。|
 
