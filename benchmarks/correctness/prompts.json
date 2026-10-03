@@ -1,0 +1,10 @@
+[
+  "Hello!",
+  "What is the capital of France?",
+  "Explain what a KV cache is in large language model inference, in three sentences.",
+  "Write a Python function that returns the n-th Fibonacci number iteratively.",
+  "用一句话解释什么是分页注意力（PagedAttention）。",
+  "List five prime numbers greater than 100 and explain how you checked each one.",
+  "Summarize the following text: Continuous batching lets an inference server add new requests to a running batch at every decoding step instead of waiting for the whole batch to finish. This keeps the GPU busy and reduces queueing delay, especially when requests have very different output lengths.",
+  "Translate to English: 今天天气很好，我们去公园散步吧。"
+]

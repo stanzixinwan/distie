@@ -11,6 +11,8 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from inference.engine import (
     BlockAllocator,
@@ -41,6 +43,32 @@ def resolve_device(requested: str) -> str:
     return device
 
 
+_DTYPES = {"fp32": "float32", "fp16": "float16", "bf16": "bfloat16"}
+
+
+def resolve_dtype(requested: str, device: str):
+    """'auto' keeps the serving default: fp16 on CUDA, fp32 on CPU."""
+    import torch
+
+    name = requested.strip().lower()
+    if name == "auto":
+        return torch.float16 if device == "cuda" else torch.float32
+    if name not in _DTYPES:
+        raise ValueError(f"dtype must be one of auto, {', '.join(_DTYPES)}")
+    return getattr(torch, _DTYPES[name])
+
+
+@dataclass(frozen=True)
+class Trace:
+    """Per-step output of one sequence through the serving path.
+
+    token_ids[t] is the argmax at step t; logits is [steps, vocab] float32 on CPU.
+    """
+
+    token_ids: list[int]
+    logits: Any
+
+
 class TorchEngine:
     def __init__(
         self,
@@ -58,19 +86,31 @@ class TorchEngine:
         self._pool = pool
         self._kv = kv_cache
 
+    @property
+    def model(self):
+        return self._model
+
+    @property
+    def tokenizer(self):
+        return self._tokenizer
+
+    @property
+    def paged(self) -> bool:
+        return self._kv is not None
+
     @classmethod
     def load(
         cls,
         model_id: str,
         device: str = "cuda",
         pool: BlockAllocator | None = None,
+        dtype: str = "auto",
     ) -> TorchEngine:
-        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         resolved = resolve_device(device)
-        dtype = torch.float16 if resolved == "cuda" else torch.float32
-        _log.info("loading torch model id=%s device=%s dtype=%s", model_id, resolved, dtype)
+        torch_dtype = resolve_dtype(dtype, resolved)
+        _log.info("loading torch model id=%s device=%s dtype=%s", model_id, resolved, torch_dtype)
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
@@ -78,7 +118,7 @@ class TorchEngine:
 
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            torch_dtype=dtype,
+            torch_dtype=torch_dtype,
             trust_remote_code=True,
         )
         model.to(resolved)
@@ -90,7 +130,7 @@ class TorchEngine:
     async def generate(self, req: GenerateRequest) -> AsyncIterator[TokenEvent]:
         started = time.perf_counter()
         cap = clamp_max_tokens(req.max_tokens)
-        prompt_ids = self._encode(req.prompt)
+        prompt_ids = self.encode(req.prompt)
         prompt_tokens = len(prompt_ids)
         block_ids: list[int] = []
         ttft_ms = 0.0
@@ -141,6 +181,51 @@ class TorchEngine:
         finally:
             release_blocks(self._pool, req.request_id, block_ids)
 
+    def trace(
+        self,
+        prompt_ids: Sequence[int],
+        max_new_tokens: int,
+        forced_ids: Sequence[int] | None = None,
+    ) -> Trace:
+        """Run one sequence synchronously through the same KV path as generate.
+
+        Free-running (forced_ids=None) feeds back the greedy pick and stops
+        after EOS. Teacher-forced feeds forced_ids so logits can be compared
+        step-by-step against a reference that saw the same prefix.
+        """
+        import torch
+
+        if not prompt_ids:
+            raise ValueError("prompt_ids must be non-empty")
+        if max_new_tokens < 1:
+            raise ValueError("max_new_tokens must be >= 1")
+        if forced_ids is not None and len(forced_ids) < max_new_tokens:
+            raise ValueError("forced_ids shorter than max_new_tokens")
+
+        request_id = "trace"
+        block_ids = self._reserve(request_id, len(prompt_ids), max_new_tokens)
+        eos_id = self._tokenizer.eos_token_id
+        picks: list[int] = []
+        rows: list = []
+        try:
+            current = list(prompt_ids)
+            past = None
+            seq_len = 0
+            for step in range(max_new_tokens):
+                logits, past, seq_len = self._forward_step(current, past, block_ids, seq_len)
+                pick = int(torch.argmax(logits).item())
+                picks.append(pick)
+                rows.append(logits)
+                if forced_ids is None:
+                    if pick == eos_id:
+                        break
+                    current = [pick]
+                else:
+                    current = [int(forced_ids[step])]
+        finally:
+            release_blocks(self._pool, request_id, block_ids)
+        return Trace(token_ids=picks, logits=torch.stack(rows))
+
     def _reserve(self, request_id: str, prompt_tokens: int, cap: int) -> list[int]:
         if self._kv is None:
             return reserve_blocks(self._pool, request_id, cap)
@@ -152,7 +237,7 @@ class TorchEngine:
             tokens_per_block=self._kv.page_size,
         )
 
-    def _encode(self, prompt: str) -> list[int]:
+    def encode(self, prompt: str) -> list[int]:
         if getattr(self._tokenizer, "chat_template", None):
             return self._tokenizer.apply_chat_template(
                 [{"role": "user", "content": prompt}],
@@ -207,23 +292,15 @@ def _maybe_paged_cache(model, pool: BlockAllocator | None, device: str) -> Paged
 
 
 def _from_hf_cache(cache) -> tuple[list, list]:
-    if hasattr(cache, "to_legacy_cache"):
-        cache = cache.to_legacy_cache()
-    keys = [layer[0] for layer in cache]
-    values = [layer[1] for layer in cache]
+    keys = [layer.keys for layer in cache.layers]
+    values = [layer.values for layer in cache.layers]
     return keys, values
 
 
 def _to_hf_past(keys: Sequence, values: Sequence):
-    legacy = tuple(zip(keys, values, strict=True))
-    try:
-        from transformers.cache_utils import DynamicCache
+    from transformers.cache_utils import DynamicCache
 
-        if hasattr(DynamicCache, "from_legacy_cache"):
-            return DynamicCache.from_legacy_cache(legacy)
-    except Exception:
-        pass
-    return legacy
+    return DynamicCache(list(zip(keys, values, strict=True)))
 
 
 def _pick_token(logits, temperature: float) -> int:

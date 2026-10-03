@@ -19,4 +19,5 @@
 | 2026-09-09 | .cursorrules：每次改动最短记入 `devlog.md`。|
 | 2026-09-09 | PagedKvCache：C++ Block ID 当页表，torch 槽位存 KV；TorchEngine scatter/gather，HF cache 不再是唯一存储。|
 | 2026-10-03 | 仓库清理：删 `bin/gateway.exe` 与 `.ps1`，新增 `build_core.sh` + 顶层 `Makefile`；C++ `BlockPool` 去掉 arena/`block_view`，只管块 ID；proposal 统一称 Gateway。|
+| 2026-10-03 | 正确性测试：`benchmarks/correctness/hf_parity.py` 对比分页 KV 路径与 HF `generate`（贪心 token 一致 + teacher-forced top-1/logits 误差），`make correctness`；`TorchEngine` 加 `trace()` 与 `dtype`；修复 transformers 5 下 `DynamicCache` 构造崩溃，依赖升至 `>=5.0`。|
 

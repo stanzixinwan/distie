@@ -12,7 +12,7 @@ if str(_SRC) not in sys.path:
 
 from inference.engine import DEFAULT_MAX_TOKENS, GenerateRequest
 from inference.kv_cache import KvShape, PagedKvCache
-from inference.torch_engine import TorchEngine, resolve_device
+from inference.torch_engine import TorchEngine, resolve_device, resolve_dtype
 from recording_pool import RecordingPool
 
 
@@ -57,6 +57,57 @@ class ResolveDeviceTest(unittest.TestCase):
 
     def test_cpu_always_ok(self) -> None:
         self.assertEqual(resolve_device("CPU"), "cpu")
+
+
+class ResolveDtypeTest(unittest.TestCase):
+    def test_auto_follows_device(self) -> None:
+        import torch
+
+        self.assertEqual(resolve_dtype("auto", "cuda"), torch.float16)
+        self.assertEqual(resolve_dtype("auto", "cpu"), torch.float32)
+
+    def test_explicit(self) -> None:
+        import torch
+
+        self.assertEqual(resolve_dtype("FP32", "cuda"), torch.float32)
+        self.assertEqual(resolve_dtype("bf16", "cpu"), torch.bfloat16)
+
+    def test_rejects_unknown(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_dtype("int8", "cpu")
+
+
+class TraceTest(unittest.TestCase):
+    def test_free_run_stops_after_eos(self) -> None:
+        pool = RecordingPool()
+        engine = TorchEngine(StubModel([3, 4, 9, 5]), StubTokenizer(), "cpu", pool=pool)
+        trace = engine.trace([1, 2], max_new_tokens=8)
+        self.assertEqual(trace.token_ids, [3, 4, 9])
+        self.assertEqual(tuple(trace.logits.shape), (3, 16))
+        self.assertEqual(pool.freed, pool.allocated)
+
+    def test_forced_feeds_given_tokens_past_eos(self) -> None:
+        model = RecordingStubModel([9, 9, 9])
+        engine = TorchEngine(model, StubTokenizer(), "cpu")
+        trace = engine.trace([1, 2], max_new_tokens=3, forced_ids=[5, 6, 7])
+        self.assertEqual(trace.token_ids, [9, 9, 9])
+        self.assertEqual(model.inputs, [[1, 2], [5], [6]])
+
+    def test_validates_arguments(self) -> None:
+        engine = TorchEngine(StubModel([3]), StubTokenizer(), "cpu")
+        with self.assertRaises(ValueError):
+            engine.trace([], max_new_tokens=2)
+        with self.assertRaises(ValueError):
+            engine.trace([1], max_new_tokens=0)
+        with self.assertRaises(ValueError):
+            engine.trace([1], max_new_tokens=3, forced_ids=[5])
+
+    def test_releases_blocks_on_error(self) -> None:
+        pool = RecordingPool()
+        engine = TorchEngine(ExplodingModel(), StubTokenizer(), "cpu", pool=pool)
+        with self.assertRaises(RuntimeError):
+            engine.trace([1, 2], max_new_tokens=4)
+        self.assertEqual(pool.freed, pool.allocated)
 
 
 class TorchEngineTest(unittest.IsolatedAsyncioTestCase):
@@ -174,6 +225,21 @@ class TorchEngineTest(unittest.IsolatedAsyncioTestCase):
             TorchEngine(StubModel([3]), StubTokenizer(), "cpu", kv_cache=kv)
 
 
+class RecordingStubModel(StubModel):
+    def __init__(self, next_ids: list[int]) -> None:
+        super().__init__(next_ids)
+        self.inputs: list[list[int]] = []
+
+    def __call__(self, input_ids, past_key_values=None, use_cache=True):
+        self.inputs.append(input_ids[0].tolist())
+        return super().__call__(input_ids, past_key_values, use_cache)
+
+
+class ExplodingModel:
+    def __call__(self, input_ids, past_key_values=None, use_cache=True):
+        raise RuntimeError("cuda error")
+
+
 class KvStubModel:
     """Emits real-shaped KV so TorchEngine can scatter/gather."""
 
@@ -189,37 +255,22 @@ class KvStubModel:
 
     def __call__(self, input_ids, past_key_values=None, use_cache=True):
         import torch
+        from transformers.cache_utils import DynamicCache
 
         seq = input_ids.shape[1]
-        past = _legacy_cache(past_key_values)
-        past_len = 0 if past is None else past[0][0].shape[2]
+        cache = past_key_values if past_key_values is not None else DynamicCache()
+        past_len = cache.get_seq_length()
         self.past_lens.append(past_len)
-        extra = tuple(
-            (
+        for layer in range(2):
+            cache.update(
                 torch.full((1, 2, seq, 4), float(past_len + 1)),
                 torch.full((1, 2, seq, 4), float(past_len + 2)),
-            )
-            for _ in range(2)
-        )
-        if past is None:
-            cache = extra
-        else:
-            cache = tuple(
-                (torch.cat([past[i][0], extra[i][0]], dim=2), torch.cat([past[i][1], extra[i][1]], dim=2))
-                for i in range(2)
+                layer,
             )
         vocab = 16
         logits = torch.zeros(1, seq, vocab)
         logits[0, -1, 3] = 20.0
         return SimpleNamespace(logits=logits, past_key_values=cache)
-
-
-def _legacy_cache(past):
-    if past is None:
-        return None
-    if hasattr(past, "to_legacy_cache"):
-        return past.to_legacy_cache()
-    return past
 
 
 if __name__ == "__main__":
