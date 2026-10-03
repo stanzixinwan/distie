@@ -18,4 +18,5 @@
 | 2026-09-06 | Windows 用 cu128 轮子装 GPU 版 torch（PyPI 默认常为 `+cpu`）。|
 | 2026-09-09 | .cursorrules：每次改动最短记入 `devlog.md`。|
 | 2026-09-09 | PagedKvCache：C++ Block ID 当页表，torch 槽位存 KV；TorchEngine scatter/gather，HF cache 不再是唯一存储。|
+| 2026-10-03 | 仓库清理：删 `bin/gateway.exe` 与 `.ps1`，新增 `build_core.sh` + 顶层 `Makefile`；C++ `BlockPool` 去掉 arena/`block_view`，只管块 ID；proposal 统一称 Gateway。|
 

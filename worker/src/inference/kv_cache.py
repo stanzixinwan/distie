@@ -1,10 +1,9 @@
 """Paged KV-cache: C++ Block IDs are the page table, torch holds the slabs.
 
-Why two stores?
-  C++ BlockPool decides which physical pages are free (no Python GC churn).
-  A pre-sized torch tensor on CPU/GPU holds the actual K/V. Same integer ID
-  indexes both. Writing K/V into the C++ CPU arena would force a DtoH copy
-  every token; that is the wrong place for GPU-resident cache.
+Control plane vs data plane:
+  C++ BlockPool only decides which page IDs are free; it holds no memory.
+  A pre-sized torch tensor on CPU/GPU holds the actual K/V, indexed by the
+  same integer ID, so K/V never crosses the device boundary per token.
 
 This is vLLM's software paging without the CUDA attention kernel: we
 gather pages into a contiguous past_key_values for standard SDPA, then

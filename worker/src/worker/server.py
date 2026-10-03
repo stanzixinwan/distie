@@ -58,12 +58,11 @@ async def serve(cfg: Config) -> None:
 def _build_engine(cfg: Config) -> Engine:
     pool = None
     if cfg.block_pool_enabled:
-        pool = load_block_pool(cfg.num_blocks, cfg.block_size_bytes)
+        pool = load_block_pool(cfg.num_blocks)
         _log.info(
-            "block pool ready worker_id=%s num_blocks=%s block_size_bytes=%s",
+            "block pool ready worker_id=%s num_blocks=%s",
             cfg.worker_id,
             cfg.num_blocks,
-            cfg.block_size_bytes,
         )
 
     if cfg.engine_kind == "fake":

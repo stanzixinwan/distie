@@ -15,7 +15,7 @@ from inference.native import load_block_pool
 class NativeBlockPoolTest(unittest.IsolatedAsyncioTestCase):
     async def test_generate_uses_cpp_pool(self) -> None:
         try:
-            pool = load_block_pool(8, 16)
+            pool = load_block_pool(8)
         except ImportError:
             self.skipTest("distie_core not built")
 

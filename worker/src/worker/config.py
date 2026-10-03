@@ -13,7 +13,6 @@ class Config:
     # Tests leave this False and inject a fake pool. load() turns it on.
     block_pool_enabled: bool = False
     num_blocks: int = 1024
-    block_size_bytes: int = 256
     # Tests leave engine_kind=fake. load() defaults to torch.
     engine_kind: str = "fake"
     model_id: str = "Qwen/Qwen2.5-1.5B-Instruct"
@@ -32,10 +31,6 @@ def load() -> Config:
     num_blocks = _env_int("WORKER_NUM_BLOCKS", 1024)
     if num_blocks < 1:
         raise ValueError("WORKER_NUM_BLOCKS must be >= 1")
-
-    block_size = _env_int("WORKER_BLOCK_SIZE_BYTES", 256)
-    if block_size < 1:
-        raise ValueError("WORKER_BLOCK_SIZE_BYTES must be >= 1")
 
     engine_kind = os.getenv("WORKER_ENGINE", "torch").strip().lower()
     if engine_kind not in {"fake", "torch"}:
@@ -56,7 +51,6 @@ def load() -> Config:
         token_delay_s=delay_ms / 1000.0,
         block_pool_enabled=_env_bool("WORKER_BLOCK_POOL", True),
         num_blocks=num_blocks,
-        block_size_bytes=block_size,
         engine_kind=engine_kind,
         model_id=model_id,
         device=device,

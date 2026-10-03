@@ -1,15 +1,18 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # 从 proto 文件生成 Go 和 Python 的 gRPC 代码
 
-set -e
+set -euo pipefail
 
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+PYTHON="${PYTHON:-python3}"
 PROTO_DIR="proto"
 PY_OUT="worker/src/proto_gen"
 MODULE="github.com/stanzixinwan/distie"
 
 mkdir -p proto/gen/go "$PY_OUT"
 
-python -c "
+"$PYTHON" -c "
 import grpc_tools.protoc, sys
 sys.exit(grpc_tools.protoc.main([
     '',
@@ -22,14 +25,14 @@ sys.exit(grpc_tools.protoc.main([
 ]))
 "
 
-python -m grpc_tools.protoc \
+"$PYTHON" -m grpc_tools.protoc \
   --proto_path="$PROTO_DIR" \
   --python_out="$PY_OUT" \
   --grpc_python_out="$PY_OUT" \
   "$PROTO_DIR/inference.proto"
 
 # protoc emits `import inference_pb2`; make it a package-relative import.
-python - "$PY_OUT/inference_pb2_grpc.py" <<'PY'
+"$PYTHON" - "$PY_OUT/inference_pb2_grpc.py" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()

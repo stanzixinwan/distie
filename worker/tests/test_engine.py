@@ -99,7 +99,6 @@ class FakeEngineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(pool.allocated[0]), 2)  # 5 tokens / 4 per block
         self.assertEqual(pool.freed, pool.allocated)
         self.assertEqual(pool.num_free, 16)
-        self.assertEqual(pool.block_view(pool.allocated[0][0])[0], 5)
 
     async def test_releases_blocks_on_cancel(self) -> None:
         pool = RecordingPool()

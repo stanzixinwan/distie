@@ -1,6 +1,5 @@
 #include "distie/block_pool.h"
 
-#include <cstdint>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -11,12 +10,11 @@ using distie::BlockId;
 using distie::BlockPool;
 
 TEST(BlockPool, RejectsEmptyConfig) {
-  EXPECT_THROW(BlockPool(0, 16), std::invalid_argument);
-  EXPECT_THROW(BlockPool(8, 0), std::invalid_argument);
+  EXPECT_THROW(BlockPool(0), std::invalid_argument);
 }
 
 TEST(BlockPool, AllocatesSequentialIds) {
-  BlockPool pool(4, 8);
+  BlockPool pool(4);
   EXPECT_EQ(pool.num_free(), 4u);
   EXPECT_DOUBLE_EQ(pool.utilization(), 0.0);
 
@@ -30,14 +28,14 @@ TEST(BlockPool, AllocatesSequentialIds) {
 }
 
 TEST(BlockPool, AllocateIsAllOrNothing) {
-  BlockPool pool(4, 8);
+  BlockPool pool(4);
   pool.Allocate(3);
   EXPECT_THROW(pool.Allocate(2), std::runtime_error);
   EXPECT_EQ(pool.num_free(), 1u);
 }
 
 TEST(BlockPool, FreeReusesLifo) {
-  BlockPool pool(4, 8);
+  BlockPool pool(4);
   auto first = pool.Allocate(1);
   pool.Free(first);
   auto second = pool.Allocate(1);
@@ -46,7 +44,7 @@ TEST(BlockPool, FreeReusesLifo) {
 }
 
 TEST(BlockPool, DoubleFreeThrowsAndLeavesPoolUnchanged) {
-  BlockPool pool(4, 8);
+  BlockPool pool(4);
   auto ids = pool.Allocate(2);
   const std::size_t used = pool.num_used();
   EXPECT_THROW(pool.Free({ids[0], ids[0]}), std::invalid_argument);
@@ -56,35 +54,21 @@ TEST(BlockPool, DoubleFreeThrowsAndLeavesPoolUnchanged) {
 }
 
 TEST(BlockPool, FreeOfUnallocatedThrows) {
-  BlockPool pool(2, 8);
+  BlockPool pool(2);
   EXPECT_THROW(pool.Free({0}), std::invalid_argument);
 }
 
-TEST(BlockPool, BlockWriteRead) {
-  BlockPool pool(2, 4);
-  auto ids = pool.Allocate(1);
-  auto* p = static_cast<std::uint8_t*>(pool.MutableBlock(ids[0]));
-  p[0] = 0xAB;
-  p[3] = 0xCD;
-  const auto* q = static_cast<const std::uint8_t*>(pool.Block(ids[0]));
-  EXPECT_EQ(q[0], 0xAB);
-  EXPECT_EQ(q[3], 0xCD);
-}
-
-TEST(BlockPool, ViewRejectedAfterFree) {
-  BlockPool pool(2, 4);
-  auto ids = pool.Allocate(1);
-  pool.Free(ids);
-  EXPECT_THROW(pool.MutableBlock(ids[0]), std::invalid_argument);
+TEST(BlockPool, FreeOutOfRangeThrows) {
+  BlockPool pool(2);
+  EXPECT_THROW(pool.Free({-1}), std::invalid_argument);
+  EXPECT_THROW(pool.Free({2}), std::invalid_argument);
 }
 
 TEST(BlockPool, ConcurrentAllocFree) {
-  BlockPool pool(64, 16);
+  BlockPool pool(64);
   auto worker = [&pool]() {
     for (int i = 0; i < 500; ++i) {
       auto ids = pool.Allocate(2);
-      auto* p = static_cast<std::uint8_t*>(pool.MutableBlock(ids[0]));
-      p[0] = static_cast<std::uint8_t>(i);
       pool.Free(ids);
     }
   };

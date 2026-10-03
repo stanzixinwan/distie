@@ -12,7 +12,7 @@
 
 - **单节点**：实现 Paged KV-Cache、自有模型前向与 Continuous Batching，使吞吐与延迟显著优于 HuggingFace 原生 `generate`，并能解释与 vLLM 之间的差距来源。
 - **跨请求**：通过前缀缓存（Prefix Caching）让共享 system prompt / 多轮对话的请求复用已计算的 KV 块，降低首字延迟（TTFT）。
-- **跨节点**：Go 路由层根据各 Worker 上报的缓存摘要做前缀感知路由，把请求送到"已经算过这段前缀"的 Worker 上。
+- **跨节点**：Go Gateway 根据各 Worker 上报的缓存摘要做前缀感知路由，把请求送到"已经算过这段前缀"的 Worker 上。
 
 本项目在本地单卡上开发，正式基准测试与多 Worker 扩展实验在云上多卡环境完成（见 §5.3），所有结论以基准测试数据为准。
 
@@ -31,7 +31,7 @@
 
 ```mermaid
 flowchart LR
-    C[Client] -->|gRPC stream| R[Router - Go]
+    C[Client] -->|gRPC stream| R[Gateway - Go]
     R -->|前缀感知路由| W1
     R --> W2[Worker 2]
     W1 -.->|健康 + 缓存摘要| R
@@ -48,11 +48,11 @@ flowchart LR
 
 
 
-### 3.1 路由层（Router — Go）
+### 3.1 网关（Gateway — Go）
 
 - **职责**：接入与流式转发、限流（漏桶）、多 Worker 负载均衡、**前缀感知路由**。
-- **路由策略**：Worker 通过 `WorkerControl.ReportHealth` 流定期上报负载与缓存摘要（前缀块哈希集合）。Router 对请求 prompt 计算同样的块哈希，按「前缀命中长度 − 负载惩罚」打分选择 Worker；无命中时退化为最少负载。
-- **为什么用 Go**：路由层是 I/O 密集、高并发、需要长连接流式转发的组件，与 SGLang Router、TGI Router 等工业实现的定位一致。
+- **路由策略**：Worker 通过 `WorkerControl.ReportHealth` 流定期上报负载与缓存摘要（前缀块哈希集合）。Gateway 对请求 prompt 计算同样的块哈希，按「前缀命中长度 − 负载惩罚」打分选择 Worker；无命中时退化为最少负载。
+- **为什么用 Go**：Gateway 是 I/O 密集、高并发、需要长连接流式转发的组件，与 SGLang Router、TGI Router 等工业实现的定位一致。
 
 
 
@@ -128,7 +128,7 @@ flowchart LR
 
 | 环境             | 硬件                            | 用途                                                                   |
 | -------------- | ----------------------------- | -------------------------------------------------------------------- |
-| macOS          | 无 CUDA                        | Go Router、C++ 块管理器、调度逻辑（FakeEngine）的开发与单元测试                          |
+| macOS          | 无 CUDA                        | Go Gateway、C++ 块管理器、调度逻辑（FakeEngine）的开发与单元测试                          |
 | Windows + WSL2 | RTX 3080 Laptop，16 GB 显存      | 模型前向、kernel、正确性测试、日常性能迭代；本地可跑 Qwen2.5-0.5B / 1.5B / 3B，多 Worker 功能联调 |
 | 云 GPU（按需租用）    | A100 / H100 / L40S 等，单机 1–8 卡 | 正式基准测试（7B/8B 级模型）、与 vLLM 同环境对比、多 Worker 路由实验、可选的张量并行实验               |
 
@@ -188,7 +188,7 @@ flowchart LR
 
 ### 阶段 6：前缀感知多 Worker 路由
 
-- Worker 经 `ReportHealth` 上报负载与前缀哈希摘要；Router 实现打分路由与退化策略。
+- Worker 经 `ReportHealth` 上报负载与前缀哈希摘要；Gateway 实现打分路由与退化策略。
 - 本地在单卡上起多个 Worker 做功能联调；正式实验在云上每卡一个 Worker（4–8 卡）。
 - **验收**：多 Worker、负载 B 下，前缀感知路由相比轮询 / 最少负载的命中率与 TTFT 对比。
 

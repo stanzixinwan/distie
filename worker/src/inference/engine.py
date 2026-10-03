@@ -26,13 +26,11 @@ class BlockPoolExhausted(RuntimeError):
 
 
 class BlockAllocator(Protocol):
-    """Python sees integer IDs only; the arena lives in C++ (or a test fake)."""
+    """KV page ID allocator: C++ BlockPool in production, a fake in tests."""
 
     def allocate(self, count: int) -> Sequence[int]: ...
 
     def free(self, block_ids: Sequence[int]) -> None: ...
-
-    def block_view(self, block_id: int) -> memoryview: ...
 
 
 class Engine(Protocol):
@@ -136,7 +134,6 @@ def reserve_blocks(
         raise BlockPoolExhausted(
             f"out of KV blocks: requested {needed} ({exc})"
         ) from exc
-    _touch_pages(pool, ids, token_count)
     _log.info(
         "kv blocks reserved request_id=%s count=%s ids=%s",
         request_id,
@@ -144,13 +141,6 @@ def reserve_blocks(
         ids,
     )
     return ids
-
-
-def _touch_pages(pool: BlockAllocator, ids: list[int], token_count: int) -> None:
-    if not ids:
-        return
-    view = pool.block_view(ids[0])
-    view[0] = min(token_count, 255)
 
 
 def release_blocks(

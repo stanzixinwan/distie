@@ -3,7 +3,7 @@ grpcio-tools>=1.83.0
 grpcio-reflection>=1.83.0
 protobuf>=5.27.2
 pybind11>=2.13.0
-# PyPI's default torch on Windows is often CPU-only (+cpu). For GPU:
-#   python -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128
+# Linux/WSL2 GPU: pin the CUDA wheel index if the default resolves to +cpu:
+#   python -m pip install torch --index-url https://download.pytorch.org/whl/cu128
 torch>=2.3.0
 transformers>=4.41.0
