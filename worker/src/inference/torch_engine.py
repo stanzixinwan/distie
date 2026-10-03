@@ -118,7 +118,7 @@ class TorchEngine:
 
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
             trust_remote_code=True,
         )
         model.to(resolved)
@@ -243,6 +243,7 @@ class TorchEngine:
                 [{"role": "user", "content": prompt}],
                 add_generation_prompt=True,
                 tokenize=True,
+                return_dict=False,
             )
         return self._tokenizer.encode(prompt, add_special_tokens=True)
 

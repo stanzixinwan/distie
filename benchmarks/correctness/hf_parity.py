@@ -45,8 +45,10 @@ def load_prompts(path: Path) -> list[str]:
 def reference_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: int):
     """Pure greedy HF generate. Returns (token_ids, logits[steps, vocab] float32 CPU).
 
-    An explicit GenerationConfig ignores the checkpoint's defaults (Qwen2.5
-    ships repetition_penalty=1.05), which would otherwise break greedy parity.
+    transformers fills every field left unset here from the checkpoint's
+    generation_config (Qwen2.5 ships repetition_penalty=1.1), so neutral
+    values must be explicit. The argmax check below catches any processor
+    that still slips through.
     """
     import torch
     from transformers import GenerationConfig
@@ -56,6 +58,7 @@ def reference_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: 
     config = GenerationConfig(
         max_new_tokens=max_new_tokens,
         do_sample=False,
+        repetition_penalty=1.0,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id,
         output_logits=True,
@@ -69,6 +72,13 @@ def reference_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: 
         )
     ids = out.sequences[0, len(prompt_ids) :].tolist()
     logits = torch.stack([step[0] for step in out.logits]).float().cpu()
+    greedy = logits.argmax(dim=-1).tolist()
+    if greedy != ids:
+        step = next(i for i, (g, r) in enumerate(zip(greedy, ids)) if g != r)
+        raise RuntimeError(
+            f"HF reference is not pure greedy at step {step} (picked {ids[step]}, argmax {greedy[step]}); "
+            "a logits processor from the checkpoint's generation_config is active"
+        )
     return ids, logits
 
 

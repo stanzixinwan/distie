@@ -80,6 +80,20 @@ class TinyQwenParityTest(unittest.TestCase):
             self.assertTrue(r.passed, r)
             self.assertIsNone(r.first_divergence)
 
+    def test_ignores_checkpoint_sampling_defaults(self) -> None:
+        engine = _tiny_engine()
+        engine.model.generation_config.do_sample = True
+        engine.model.generation_config.repetition_penalty = 3.0
+        engine.model.generation_config.top_k = 2
+        results = run(engine, ["hi there hi there"], max_new_tokens=12, thresholds=default_thresholds("fp32"))
+        self.assertTrue(results[0].passed, results[0])
+
+    def test_rejects_non_greedy_reference(self) -> None:
+        engine = _tiny_engine()
+        engine.model.generation_config.no_repeat_ngram_size = 1
+        with self.assertRaises(RuntimeError):
+            run(engine, ["hi"], max_new_tokens=12, thresholds=default_thresholds("fp32"))
+
     def test_detects_corrupted_kv(self) -> None:
         original = PagedKvCache.gather
 

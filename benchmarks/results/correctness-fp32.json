@@ -1,0 +1,116 @@
+{
+  "environment": {
+    "model": "Qwen/Qwen2.5-1.5B-Instruct",
+    "device": "cpu",
+    "dtype": "fp32",
+    "python": "3.12.15",
+    "platform": "macOS-26.6-arm64-arm-64bit",
+    "torch": "2.14.1",
+    "transformers": "5.18.0",
+    "cuda": null
+  },
+  "max_new_tokens": 32,
+  "thresholds": {
+    "require_greedy_match": true,
+    "min_top1_agreement": 1.0,
+    "max_abs_logit_err": 0.001
+  },
+  "summary": {
+    "prompts": 8,
+    "passed": 8,
+    "greedy_match": 8,
+    "min_top1_agreement": 1.0,
+    "max_abs_logit_err": 4.76837158203125e-05,
+    "all_passed": true
+  },
+  "results": [
+    {
+      "index": 0,
+      "prompt_tokens": 31,
+      "reference_tokens": 10,
+      "candidate_tokens": 10,
+      "first_divergence": null,
+      "top1_agreement": 1.0,
+      "max_abs_logit_err": 2.956390380859375e-05,
+      "passed": true,
+      "greedy_match": true
+    },
+    {
+      "index": 1,
+      "prompt_tokens": 36,
+      "reference_tokens": 8,
+      "candidate_tokens": 8,
+      "first_divergence": null,
+      "top1_agreement": 1.0,
+      "max_abs_logit_err": 2.765655517578125e-05,
+      "passed": true,
+      "greedy_match": true
+    },
+    {
+      "index": 2,
+      "prompt_tokens": 46,
+      "reference_tokens": 32,
+      "candidate_tokens": 32,
+      "first_divergence": null,
+      "top1_agreement": 1.0,
+      "max_abs_logit_err": 3.337860107421875e-05,
+      "passed": true,
+      "greedy_match": true
+    },
+    {
+      "index": 3,
+      "prompt_tokens": 43,
+      "reference_tokens": 32,
+      "candidate_tokens": 32,
+      "first_divergence": null,
+      "top1_agreement": 1.0,
+      "max_abs_logit_err": 3.62396240234375e-05,
+      "passed": true,
+      "greedy_match": true
+    },
+    {
+      "index": 4,
+      "prompt_tokens": 41,
+      "reference_tokens": 32,
+      "candidate_tokens": 32,
+      "first_divergence": null,
+      "top1_agreement": 1.0,
+      "max_abs_logit_err": 2.765655517578125e-05,
+      "passed": true,
+      "greedy_match": true
+    },
+    {
+      "index": 5,
+      "prompt_tokens": 47,
+      "reference_tokens": 32,
+      "candidate_tokens": 32,
+      "first_divergence": null,
+      "top1_agreement": 1.0,
+      "max_abs_logit_err": 3.62396240234375e-05,
+      "passed": true,
+      "greedy_match": true
+    },
+    {
+      "index": 6,
+      "prompt_tokens": 83,
+      "reference_tokens": 32,
+      "candidate_tokens": 32,
+      "first_divergence": null,
+      "top1_agreement": 1.0,
+      "max_abs_logit_err": 3.4332275390625e-05,
+      "passed": true,
+      "greedy_match": true
+    },
+    {
+      "index": 7,
+      "prompt_tokens": 44,
+      "reference_tokens": 17,
+      "candidate_tokens": 17,
+      "first_divergence": null,
+      "top1_agreement": 1.0,
+      "max_abs_logit_err": 4.76837158203125e-05,
+      "passed": true,
+      "greedy_match": true
+    }
+  ]
+}

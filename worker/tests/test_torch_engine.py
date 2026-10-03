@@ -77,6 +77,26 @@ class ResolveDtypeTest(unittest.TestCase):
             resolve_dtype("int8", "cpu")
 
 
+class ChatTokenizer(StubTokenizer):
+    """Mimics transformers 5: apply_chat_template returns a dict unless told not to."""
+
+    chat_template = "{{ messages }}"
+
+    def apply_chat_template(self, messages, add_generation_prompt, tokenize, return_dict=True):
+        ids = [7, 8, 1, 2]
+        return {"input_ids": ids, "attention_mask": [1] * len(ids)} if return_dict else ids
+
+
+class EncodeTest(unittest.TestCase):
+    def test_chat_template_returns_token_ids(self) -> None:
+        engine = TorchEngine(StubModel([3]), ChatTokenizer(), "cpu")
+        self.assertEqual(engine.encode("hi"), [7, 8, 1, 2])
+
+    def test_plain_tokenizer(self) -> None:
+        engine = TorchEngine(StubModel([3]), StubTokenizer(), "cpu")
+        self.assertEqual(engine.encode("hi"), [1, 2])
+
+
 class TraceTest(unittest.TestCase):
     def test_free_run_stops_after_eos(self) -> None:
         pool = RecordingPool()
