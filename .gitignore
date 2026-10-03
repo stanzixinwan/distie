@@ -19,6 +19,9 @@ CMakeUserPresets.json
 *.obj
 *.ilk
 
+# Benchmark datasets (downloaded by `make sharegpt`)
+benchmarks/data/
+
 # Local binaries
 bin/
 dist/
