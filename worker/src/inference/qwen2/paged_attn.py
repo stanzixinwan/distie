@@ -1,19 +1,29 @@
 """Paged attention for one sequence.
 
 The torch backend writes new K/V straight into flash-layout pages, then
-indexes that sequence's pages into a dense tensor for SDPA. A later backend
-can replace the index+SDPA step with a kernel that takes the block table.
+indexes that sequence's pages into a dense tensor for SDPA. DISTIE_ATTN=flash
+instead calls flash_attn_with_kvcache, which reads the block table inside
+the kernel. fp32 stays on the torch path: the kernel is fp16/bf16 only.
 Batch stays 1 until the scheduler loop owns the GPU.
 """
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Sequence
 
 import torch
 from torch.nn import functional as F
 
-from inference.kv_cache import PagedKvCache, pages_needed
+from inference.kv_cache import DEFAULT_PAGE_SIZE, PagedKvCache, pages_needed
+
+# flash_attn_with_kvcache rejects any paged block that is not a multiple of 256.
+FLASH_PAGE_SIZE = 256
+
+_log = logging.getLogger(__name__)
+_flash_import_failed = False
+_flash_dtype_failed = False
 
 
 def attend(
@@ -38,6 +48,8 @@ def attend(
         raise ValueError("seq_len must be >= 0")
     q_len = int(query.shape[2])
     cache.check_table(block_ids, seq_len + q_len)
+    if _backend(query.dtype) == "flash":
+        return _flash_attend(query, key, value, cache, layer, block_ids, seq_len)
     cache_k, cache_v = cache.layer_kv(layer)
     _write(cache_k, block_ids, seq_len, key[0], cache.page_size)
     _write(cache_v, block_ids, seq_len, value[0], cache.page_size)
@@ -117,3 +129,68 @@ def _sdpa(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.
     mask = torch.zeros(q_len, kv_len, device=query.device, dtype=query.dtype)
     mask = mask.masked_fill(blocked, torch.finfo(query.dtype).min)
     return F.scaled_dot_product_attention(query, key, value, attn_mask=mask)
+
+
+def _backend(dtype: torch.dtype) -> str:
+    """'flash' only when requested, installed, and the dtype is half precision."""
+    global _flash_import_failed, _flash_dtype_failed
+    name = os.environ.get("DISTIE_ATTN", "torch").strip().lower()
+    if name in {"", "torch"}:
+        return "torch"
+    if name != "flash":
+        raise ValueError("DISTIE_ATTN must be 'torch' or 'flash'")
+    if dtype not in {torch.float16, torch.bfloat16}:
+        if not _flash_dtype_failed:
+            _log.error("DISTIE_ATTN=flash does not support %s; using torch indexing", dtype)
+            _flash_dtype_failed = True
+        return "torch"
+    try:
+        from flash_attn import flash_attn_with_kvcache  # noqa: F401
+    except ImportError:
+        if not _flash_import_failed:
+            _log.error("DISTIE_ATTN=flash but flash_attn is not installed; using torch indexing")
+            _flash_import_failed = True
+        return "torch"
+    return "flash"
+
+
+def serving_page_size(dtype: torch.dtype) -> int:
+    """Page size for a newly allocated slab. The torch path keeps the small default."""
+    if _backend(dtype) == "flash":
+        return FLASH_PAGE_SIZE
+    return DEFAULT_PAGE_SIZE
+
+
+def _flash_attend(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    cache: PagedKvCache,
+    layer: int,
+    block_ids: Sequence[int],
+    seq_len: int,
+) -> torch.Tensor:
+    """query is [1, heads, q_len, dim]. The kernel appends key/value into the slab."""
+    if cache.page_size % FLASH_PAGE_SIZE != 0:
+        raise ValueError(
+            "flash_attn_with_kvcache requires page_size to be a multiple of "
+            f"{FLASH_PAGE_SIZE}, got {cache.page_size}"
+        )
+    from flash_attn import flash_attn_with_kvcache
+
+    cache_k, cache_v = cache.layer_kv(layer)
+    q_len = int(query.shape[2])
+    needed = pages_needed(seq_len + q_len, cache.page_size)
+    table = torch.tensor([list(block_ids[:needed])], dtype=torch.int32, device=query.device)
+    seqlens = torch.tensor([seq_len], dtype=torch.int32, device=query.device)
+    out = flash_attn_with_kvcache(
+        query.transpose(1, 2).contiguous(),
+        cache_k,
+        cache_v,
+        k=key.transpose(1, 2).contiguous(),
+        v=value.transpose(1, 2).contiguous(),
+        cache_seqlens=seqlens,
+        block_table=table,
+        causal=True,
+    )
+    return out.transpose(1, 2).contiguous()

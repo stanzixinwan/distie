@@ -27,4 +27,5 @@
 | 2026-10-09 | `proposal.md` 在中文正文后附上完整英文译本，章节与术语对齐。|
 | 2026-10-09 | 自写 Qwen2 稠密前向（RMSNorm、rotate-half RoPE、GQA、SwiGLU），权重从 HF 拷贝；小模型 eager logits 对齐。|
 | 2026-10-09 | Qwen2 attention 按 block table 直接读写分页 KV（flash 布局 + SDPA）；服务路径去掉 gather/scatter。HF 参考模型与候选分开加载。|
+| 2026-10-09 | `DISTIE_ATTN=flash` 用 `flash_attn_with_kvcache` 按 block table 追加 KV（页大小须为 256 的倍数）；fp32 或未安装则记错误并退回 torch 索引。|
 

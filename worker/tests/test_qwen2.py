@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import types
 import unittest
 from pathlib import Path
 
@@ -90,6 +92,91 @@ class Qwen2DenseParityTest(unittest.TestCase):
                 step = ours.forward_paged(ids[:, pos : pos + 1], cache, table, seq_len)
                 self.assertLess((step[:, 0] - dense[:, pos]).abs().max().item(), 1e-4)
                 seq_len += 1
+
+    def test_flash_request_uses_block_table(self) -> None:
+        calls: dict = {}
+        fake = types.ModuleType("flash_attn")
+
+        def flash_attn_with_kvcache(q, k_cache, v_cache, k=None, v=None, cache_seqlens=None, block_table=None, causal=False, **kwargs):
+            calls["q"] = tuple(q.shape)
+            calls["k"] = None if k is None else tuple(k.shape)
+            calls["cache"] = tuple(k_cache.shape)
+            calls["table"] = block_table.tolist()
+            calls["seqlens"] = cache_seqlens.tolist()
+            calls["causal"] = causal
+            return torch.zeros_like(q)
+
+        fake.flash_attn_with_kvcache = flash_attn_with_kvcache
+        sys.modules["flash_attn"] = fake
+        os.environ["DISTIE_ATTN"] = "flash"
+        try:
+            config = _tiny_config()
+            ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval()).half()
+            ids = torch.randint(0, config.vocab_size, (1, 3))
+            cache = PagedKvCache(
+                KvShape(config.num_hidden_layers, config.num_key_value_heads, 8),
+                num_blocks=2,
+                device="cpu",
+                dtype=torch.float16,
+                page_size=256,
+            )
+            with torch.inference_mode():
+                ours.forward_paged(ids, cache, [1, 0], 0)
+            self.assertEqual(calls["q"], (1, 3, 4, 8))
+            self.assertEqual(calls["k"], (1, 3, 2, 8))
+            self.assertEqual(calls["cache"], (2, 256, 2, 8))
+            self.assertEqual(calls["table"], [[1]])
+            self.assertEqual(calls["seqlens"], [0])
+            self.assertTrue(calls["causal"])
+        finally:
+            os.environ.pop("DISTIE_ATTN", None)
+            sys.modules.pop("flash_attn", None)
+
+    def test_flash_rejects_small_pages(self) -> None:
+        def refuse(*args, **kwargs):
+            raise AssertionError("kernel must not run")
+
+        fake = types.ModuleType("flash_attn")
+        fake.flash_attn_with_kvcache = refuse
+        sys.modules["flash_attn"] = fake
+        os.environ["DISTIE_ATTN"] = "flash"
+        try:
+            config = _tiny_config()
+            ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval()).half()
+            ids = torch.randint(0, config.vocab_size, (1, 2))
+            cache = PagedKvCache(
+                KvShape(config.num_hidden_layers, config.num_key_value_heads, 8),
+                num_blocks=1,
+                device="cpu",
+                dtype=torch.float16,
+                page_size=16,
+            )
+            with self.assertRaises(ValueError):
+                with torch.inference_mode():
+                    ours.forward_paged(ids, cache, [0], 0)
+        finally:
+            os.environ.pop("DISTIE_ATTN", None)
+            sys.modules.pop("flash_attn", None)
+
+    def test_flash_falls_back_for_fp32(self) -> None:
+        os.environ["DISTIE_ATTN"] = "flash"
+        try:
+            config = _tiny_config()
+            ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval())
+            ids = torch.randint(0, config.vocab_size, (1, 3))
+            cache = PagedKvCache(
+                KvShape(config.num_hidden_layers, config.num_key_value_heads, 8),
+                num_blocks=2,
+                device="cpu",
+                dtype=torch.float32,
+                page_size=16,
+            )
+            with torch.inference_mode():
+                paged = ours.forward_paged(ids, cache, [0], 0)
+                dense = ours(ids)
+            self.assertLess((paged - dense).abs().max().item(), 1e-4)
+        finally:
+            os.environ.pop("DISTIE_ATTN", None)
 
     def test_rejects_empty_sequence(self) -> None:
         torch.manual_seed(0)

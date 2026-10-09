@@ -23,6 +23,7 @@ from inference.engine import (
     reserve_blocks,
 )
 from inference.kv_cache import KvShape, PagedKvCache
+from inference.qwen2.paged_attn import serving_page_size
 from inference.qwen2 import Qwen2CausalLM
 
 _log = logging.getLogger(__name__)
@@ -304,7 +305,13 @@ def _maybe_paged_cache(model, pool: BlockAllocator | None, device: str) -> Paged
     import torch
 
     dtype = next(model.parameters()).dtype
-    return PagedKvCache(shape, num_blocks=int(num_blocks), device=device, dtype=dtype)
+    return PagedKvCache(
+        shape,
+        num_blocks=int(num_blocks),
+        device=device,
+        dtype=dtype,
+        page_size=serving_page_size(dtype),
+    )
 
 
 def _pick_token(logits, temperature: float) -> int:

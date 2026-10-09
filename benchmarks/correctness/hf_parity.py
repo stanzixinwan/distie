@@ -227,6 +227,7 @@ def _candidate_engine(args, tokenizer, dtype):
     from transformers import AutoModelForCausalLM
 
     from inference.kv_cache import KvShape, PagedKvCache
+    from inference.qwen2.paged_attn import serving_page_size
     from inference.native import load_block_pool
     from inference.qwen2 import Qwen2CausalLM
     from inference.torch_engine import TorchEngine
@@ -240,7 +241,13 @@ def _candidate_engine(args, tokenizer, dtype):
         torch.cuda.empty_cache()
     pool = load_block_pool(args.num_blocks)
     shape = KvShape(model.dims.num_hidden_layers, model.dims.num_key_value_heads, model.dims.head_dim)
-    cache = PagedKvCache(shape, num_blocks=pool.num_blocks, device=args.device, dtype=dtype)
+    cache = PagedKvCache(
+        shape,
+        num_blocks=pool.num_blocks,
+        device=args.device,
+        dtype=dtype,
+        page_size=serving_page_size(dtype),
+    )
     return TorchEngine(model, tokenizer, args.device, pool=pool, kv_cache=cache)
 
 

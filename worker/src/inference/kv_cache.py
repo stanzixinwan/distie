@@ -20,6 +20,8 @@ from dataclasses import dataclass
 _log = logging.getLogger(__name__)
 
 # vLLM default page size. FakeEngine keeps TOKENS_PER_BLOCK=4 (occupancy toy).
+# flash_attn_with_kvcache only accepts a page that is a multiple of 256;
+# serving_page_size() selects that when DISTIE_ATTN=flash.
 DEFAULT_PAGE_SIZE = 16
 
 
