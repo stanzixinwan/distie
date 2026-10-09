@@ -26,4 +26,5 @@
 | 2026-10-09 | 阶段 2 基线（RTX 3080 Laptop，fp16 serving）：fp32/fp16 正确性均 8/8 贪心一致；ShareGPT 200 请求、并发 1，40.8 output tok/s，TTFT p50 29.6 ms，TPOT p50 23.7 ms。`make bench` 默认并发 1，避免当前引擎并发踩共用 KV。|
 | 2026-10-09 | `proposal.md` 在中文正文后附上完整英文译本，章节与术语对齐。|
 | 2026-10-09 | 自写 Qwen2 稠密前向（RMSNorm、rotate-half RoPE、GQA、SwiGLU），权重从 HF 拷贝；小模型 eager logits 对齐。|
+| 2026-10-09 | Qwen2 attention 按 block table 直接读写分页 KV（flash 布局 + SDPA）；服务路径去掉 gather/scatter。HF 参考模型与候选分开加载。|
 

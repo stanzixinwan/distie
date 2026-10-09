@@ -43,8 +43,10 @@ class _ByteTokenizer:
         return " ".join(str(i) for i in ids)
 
 
-def _tiny_engine(num_blocks: int = 64) -> TorchEngine:
+def _pair(num_blocks: int = 64):
     from transformers import Qwen2Config, Qwen2ForCausalLM
+
+    from inference.qwen2 import Qwen2CausalLM
 
     torch.manual_seed(0)
     config = Qwen2Config(
@@ -59,7 +61,9 @@ def _tiny_engine(num_blocks: int = 64) -> TorchEngine:
         # Default 0.02 gives near-uniform logits that hide KV corruption.
         initializer_range=0.5,
     )
-    model = Qwen2ForCausalLM(config).eval()
+    config._attn_implementation = "sdpa"
+    reference = Qwen2ForCausalLM(config).eval()
+    model = Qwen2CausalLM.from_hf(reference)
     pool = _Pool(num_blocks)
     kv = PagedKvCache(
         KvShape.from_hf_config(config),
@@ -68,53 +72,65 @@ def _tiny_engine(num_blocks: int = 64) -> TorchEngine:
         dtype=torch.float32,
         page_size=4,
     )
-    return TorchEngine(model, _ByteTokenizer(), "cpu", pool=pool, kv_cache=kv)
+    engine = TorchEngine(model, _ByteTokenizer(), "cpu", pool=pool, kv_cache=kv)
+    return reference, engine
 
 
 class TinyQwenParityTest(unittest.TestCase):
     def test_fp32_matches_hf_generate(self) -> None:
-        engine = _tiny_engine()
+        reference, engine = _pair()
         prompts = ["hi", "a prompt that spans several kv pages"]
-        results = run(engine, prompts, max_new_tokens=12, thresholds=default_thresholds("fp32"))
+        results = run(engine, prompts, max_new_tokens=12, thresholds=default_thresholds("fp32"), reference=reference)
         for r in results:
             self.assertTrue(r.passed, r)
             self.assertIsNone(r.first_divergence)
 
     def test_ignores_checkpoint_sampling_defaults(self) -> None:
-        engine = _tiny_engine()
-        engine.model.generation_config.do_sample = True
-        engine.model.generation_config.repetition_penalty = 3.0
-        engine.model.generation_config.top_k = 2
-        results = run(engine, ["hi there hi there"], max_new_tokens=12, thresholds=default_thresholds("fp32"))
+        reference, engine = _pair()
+        reference.generation_config.do_sample = True
+        reference.generation_config.repetition_penalty = 3.0
+        reference.generation_config.top_k = 2
+        results = run(
+            engine,
+            ["hi there hi there"],
+            max_new_tokens=12,
+            thresholds=default_thresholds("fp32"),
+            reference=reference,
+        )
         self.assertTrue(results[0].passed, results[0])
 
     def test_rejects_non_greedy_reference(self) -> None:
-        engine = _tiny_engine()
-        engine.model.generation_config.no_repeat_ngram_size = 1
+        reference, engine = _pair()
+        reference.generation_config.no_repeat_ngram_size = 1
         with self.assertRaises(RuntimeError):
-            run(engine, ["hi"], max_new_tokens=12, thresholds=default_thresholds("fp32"))
+            run(engine, ["hi"], max_new_tokens=12, thresholds=default_thresholds("fp32"), reference=reference)
 
     def test_detects_corrupted_kv(self) -> None:
-        original = PagedKvCache.gather
+        import inference.qwen2.paged_attn as paged_attn
 
-        def corrupt_newest_key(self, block_ids, seq_len):
-            out = original(self, block_ids, seq_len)
-            if out is None:
-                return out
-            keys, values = out
-            keys[0][:, :, -1, :] = 0
+        original = paged_attn.read_kv
+
+        def corrupt(cache_k, cache_v, block_ids, seq_len, page_size):
+            keys, values = original(cache_k, cache_v, block_ids, seq_len, page_size)
+            keys[:, -1, :] = 0
             return keys, values
 
-        engine = _tiny_engine()
-        with patch.object(PagedKvCache, "gather", corrupt_newest_key):
-            results = run(engine, ["hi", "a prompt that spans several kv pages"], 12, default_thresholds("fp32"))
+        reference, engine = _pair()
+        with patch.object(paged_attn, "read_kv", corrupt):
+            results = run(
+                engine,
+                ["hi", "a prompt that spans several kv pages"],
+                12,
+                default_thresholds("fp32"),
+                reference,
+            )
         self.assertTrue(all(not r.passed for r in results))
 
     def test_requires_paged_engine(self) -> None:
-        paged = _tiny_engine()
+        reference, paged = _pair()
         engine = TorchEngine(paged.model, paged.tokenizer, "cpu")
         with self.assertRaises(RuntimeError):
-            run(engine, ["hi"], max_new_tokens=2, thresholds=default_thresholds("fp32"))
+            run(engine, ["hi"], max_new_tokens=2, thresholds=default_thresholds("fp32"), reference=reference)
 
 
 if __name__ == "__main__":

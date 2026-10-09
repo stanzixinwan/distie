@@ -14,6 +14,9 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
+from inference.kv_cache import PagedKvCache
+from inference.qwen2.paged_attn import attend
+
 _log = logging.getLogger(__name__)
 
 
@@ -149,17 +152,40 @@ class Attention(nn.Module):
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, hidden, bias=False)
 
     def forward(self, hidden: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        query, key, value = self._project(hidden, cos, sin)
+        seq = query.shape[2]
+        scores = torch.matmul(query, _repeat_kv(key, self.num_kv_groups).transpose(2, 3)) * self.scaling
+        scores = scores + _causal_mask(seq, seq, scores.device, scores.dtype)
+        weights = torch.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
+        mixed = torch.matmul(weights, _repeat_kv(value, self.num_kv_groups))
+        return self._merge(mixed)
+
+    def forward_paged(
+        self,
+        hidden: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: PagedKvCache,
+        layer: int,
+        block_ids: list[int],
+        seq_len: int,
+    ) -> torch.Tensor:
+        query, key, value = self._project(hidden, cos, sin)
+        mixed = attend(query, key, value, cache, layer, block_ids, seq_len, self.num_kv_groups)
+        return self._merge(mixed)
+
+    def _project(self, hidden: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
         batch, seq, _ = hidden.shape
         query = self.q_proj(hidden).view(batch, seq, self.num_heads, self.head_dim).transpose(1, 2)
         key = self.k_proj(hidden).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
         value = self.v_proj(hidden).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
         query, key = _apply_rope(query, key, cos, sin)
-        scores = torch.matmul(query, _repeat_kv(key, self.num_kv_groups).transpose(2, 3)) * self.scaling
-        scores = scores + _causal_mask(seq, seq, scores.device, scores.dtype)
-        weights = torch.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
-        mixed = torch.matmul(weights, _repeat_kv(value, self.num_kv_groups))
-        mixed = mixed.transpose(1, 2).contiguous().view(batch, seq, -1)
-        return self.o_proj(mixed)
+        return query, key, value
+
+    def _merge(self, mixed: torch.Tensor) -> torch.Tensor:
+        batch, _, seq, _ = mixed.shape
+        flat = mixed.transpose(1, 2).contiguous().view(batch, seq, -1)
+        return self.o_proj(flat)
 
 
 class MLP(nn.Module):
@@ -185,6 +211,20 @@ class DecoderLayer(nn.Module):
         hidden = hidden + self.self_attn(self.input_layernorm(hidden), cos, sin)
         return hidden + self.mlp(self.post_attention_layernorm(hidden))
 
+    def forward_paged(
+        self,
+        hidden: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: PagedKvCache,
+        layer: int,
+        block_ids: list[int],
+        seq_len: int,
+    ) -> torch.Tensor:
+        normed = self.input_layernorm(hidden)
+        hidden = hidden + self.self_attn.forward_paged(normed, cos, sin, cache, layer, block_ids, seq_len)
+        return hidden + self.mlp(self.post_attention_layernorm(hidden))
+
 
 class Qwen2CausalLM(nn.Module):
     def __init__(self, dims: Qwen2Dims) -> None:
@@ -207,6 +247,31 @@ class Qwen2CausalLM(nn.Module):
         cos, sin = self.rotary_emb(hidden, position_ids)
         for layer in self.layers:
             hidden = layer(hidden, cos, sin)
+        return self.lm_head(self.norm(hidden))
+
+    def forward_paged(
+        self,
+        input_ids: torch.Tensor,
+        cache: PagedKvCache,
+        block_ids: list[int],
+        seq_len: int,
+    ) -> torch.Tensor:
+        """One sequence, reading and writing `cache`. Logits are [1, q_len, vocab].
+
+        seq_len is the number of tokens already stored for this request.
+        """
+        if input_ids.ndim != 2 or input_ids.shape[0] != 1 or input_ids.shape[1] < 1:
+            raise ValueError("paged forward expects input_ids [1, q_len] with q_len >= 1")
+        if seq_len < 0:
+            raise ValueError("seq_len must be >= 0")
+        if cache.shape.num_layers != self.dims.num_hidden_layers:
+            raise ValueError("KV cache layer count does not match the model")
+        hidden = self.embed_tokens(input_ids)
+        q_len = input_ids.shape[1]
+        position_ids = torch.arange(seq_len, seq_len + q_len, device=input_ids.device).unsqueeze(0)
+        cos, sin = self.rotary_emb(hidden, position_ids)
+        for index, layer in enumerate(self.layers):
+            hidden = layer.forward_paged(hidden, cos, sin, cache, index, block_ids, seq_len)
         return self.lm_head(self.norm(hidden))
 
     @classmethod

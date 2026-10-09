@@ -5,9 +5,9 @@ Control plane vs data plane:
   A pre-sized torch tensor on CPU/GPU holds the actual K/V, indexed by the
   same integer ID, so K/V never crosses the device boundary per token.
 
-This is vLLM's software paging without the CUDA attention kernel: we
-gather pages into a contiguous past_key_values for standard SDPA, then
-scatter new tokens back. Gather is the cost to delete next.
+Physical layout matches flash-attn's paged cache, one tensor per layer:
+[num_blocks, page_size, num_kv_heads, head_dim]. Attention writes new
+K/V into those slots. scatter/gather still rebuild a dense view for tests.
 """
 
 from __future__ import annotations
@@ -59,14 +59,14 @@ class KvShape:
 class PagedKvCache:
     """Physical KV slabs indexed by BlockPool IDs.
 
-    Layout (matches HuggingFace BHSD: batch, heads, seq, dim after gather):
-      k, v : [num_layers, num_blocks, num_kv_heads, page_size, head_dim]
+    Layout, per layer (flash-attn paged KV):
+      k, v : [num_layers, num_blocks, page_size, num_kv_heads, head_dim]
 
     Logical token `pos` of one request maps to:
       page   = pos // page_size          # index into that request's block table
       offset = pos %  page_size
       slot   = block_ids[page]           # physical BlockId from C++
-      k[layer, slot, :, offset, :]
+      k[layer, slot, offset, :, :]
     """
 
     def __init__(
@@ -93,8 +93,8 @@ class PagedKvCache:
         slot_shape = (
             shape.num_layers,
             num_blocks,
-            shape.num_kv_heads,
             page_size,
+            shape.num_kv_heads,
             shape.head_dim,
         )
         self._k = torch.zeros(slot_shape, device=device, dtype=dtype)
@@ -147,12 +147,12 @@ class PagedKvCache:
             slot = int(block_ids[page])
             n = min(self.page_size - offset, seq_len - pos)
             for layer in range(self.shape.num_layers):
-                # dest: [H, n, D]  src: [1, H, n, D] squeezed at batch.
-                self._k[layer, slot, :, offset : offset + n, :].copy_(
-                    keys[layer][0, :, pos : pos + n, :]
+                # src [H, n, D] -> dest [n, H, D] in the flash page layout.
+                self._k[layer, slot, offset : offset + n].copy_(
+                    keys[layer][0, :, pos : pos + n, :].transpose(0, 1)
                 )
-                self._v[layer, slot, :, offset : offset + n, :].copy_(
-                    values[layer][0, :, pos : pos + n, :]
+                self._v[layer, slot, offset : offset + n].copy_(
+                    values[layer][0, :, pos : pos + n, :].transpose(0, 1)
                 )
             pos += n
 
@@ -182,9 +182,9 @@ class PagedKvCache:
         for page in range(n_pages):
             slot = int(block_ids[page])
             n = min(self.page_size, remaining)
-            # [L, H, n, D]
-            k_pieces.append(self._k[:, slot, :, :n, :])
-            v_pieces.append(self._v[:, slot, :, :n, :])
+            # [L, n, H, D] -> [L, H, n, D]
+            k_pieces.append(self._k[:, slot, :n].permute(0, 2, 1, 3))
+            v_pieces.append(self._v[:, slot, :n].permute(0, 2, 1, 3))
             remaining -= n
 
         # cat along seq -> [L, H, S, D], then split per layer with batch dim.
@@ -193,6 +193,15 @@ class PagedKvCache:
         keys = [k_all[layer].unsqueeze(0) for layer in range(self.shape.num_layers)]
         values = [v_all[layer].unsqueeze(0) for layer in range(self.shape.num_layers)]
         return keys, values
+
+    def layer_kv(self, layer: int):
+        """Contiguous flash-layout slabs for one layer: [blocks, page, heads, dim]."""
+        if layer < 0 or layer >= self.shape.num_layers:
+            raise ValueError(f"layer {layer} out of range")
+        return self._k[layer], self._v[layer]
+
+    def check_table(self, block_ids: Sequence[int], seq_len: int) -> None:
+        self._check_table(block_ids, seq_len)
 
     def _check_table(self, block_ids: Sequence[int], seq_len: int) -> None:
         need = pages_needed(seq_len, self.page_size)

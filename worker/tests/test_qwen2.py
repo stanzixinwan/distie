@@ -13,6 +13,7 @@ if str(_SRC) not in sys.path:
 import torch
 from transformers import Qwen2Config, Qwen2ForCausalLM
 
+from inference.kv_cache import KvShape, PagedKvCache
 from inference.qwen2 import Qwen2CausalLM
 
 
@@ -66,6 +67,29 @@ class Qwen2DenseParityTest(unittest.TestCase):
         hf.config.layer_types = ["sliding_attention", "full_attention"]
         with self.assertRaises(ValueError):
             Qwen2CausalLM.from_hf(hf)
+
+    def test_paged_decode_matches_dense(self) -> None:
+        torch.manual_seed(0)
+        config = _tiny_config()
+        ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval())
+        ids = torch.randint(0, config.vocab_size, (1, 7))
+        with torch.inference_mode():
+            dense = ours(ids)
+            cache = PagedKvCache(
+                KvShape(config.num_hidden_layers, config.num_key_value_heads, config.hidden_size // config.num_attention_heads),
+                num_blocks=4,
+                device="cpu",
+                dtype=torch.float32,
+                page_size=4,
+            )
+            table = [2, 0]
+            prefill = ours.forward_paged(ids[:, :4], cache, table, 0)
+            self.assertLess((prefill - dense[:, :4]).abs().max().item(), 1e-4)
+            seq_len = 4
+            for pos in range(4, ids.shape[1]):
+                step = ours.forward_paged(ids[:, pos : pos + 1], cache, table, seq_len)
+                self.assertLess((step[:, 0] - dense[:, pos]).abs().max().item(), 1e-4)
+                seq_len += 1
 
     def test_rejects_empty_sequence(self) -> None:
         torch.manual_seed(0)
