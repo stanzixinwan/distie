@@ -1,4 +1,8 @@
-"""Open-loop async gRPC load generator for InferenceService.InferStream."""
+"""Open-loop async load generator.
+
+backend="grpc" streams InferenceService.InferStream (Worker or Gateway);
+backend="openai" streams /v1/chat/completions (vLLM), see openai_client.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,8 @@ import logging
 import math
 import random
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 
 import grpc
 
@@ -16,6 +21,8 @@ from stats import RequestRecord
 from workload import BenchRequest
 
 _log = logging.getLogger(__name__)
+
+BACKENDS = ("grpc", "openai")
 
 
 async def send_one(
@@ -62,6 +69,25 @@ async def send_one(
     )
 
 
+@asynccontextmanager
+async def _grpc_sender(target: str, model_name: str, timeout_s: float) -> AsyncIterator:
+    async with grpc.aio.insecure_channel(target) as channel:
+        stub = inference_pb2_grpc.InferenceServiceStub(channel)
+
+        async def send(req: BenchRequest, request_id: str, bench_start: float) -> RequestRecord:
+            return await send_one(stub, req, request_id, model_name, timeout_s, bench_start)
+
+        yield send
+
+
+def _sender(backend: str, target: str, model_name: str, timeout_s: float, transport):
+    if backend == "grpc":
+        return _grpc_sender(target, model_name, timeout_s)
+    import openai_client  # httpx is only needed for this backend
+
+    return openai_client.sender(target, model_name, timeout_s, transport=transport)
+
+
 async def run_benchmark(
     target: str,
     requests: Sequence[BenchRequest],
@@ -71,12 +97,17 @@ async def run_benchmark(
     timeout_s: float = 300.0,
     warmup: int = 0,
     seed: int = 0,
+    backend: str = "grpc",
+    transport=None,
 ) -> tuple[list[RequestRecord], float]:
     """Send requests with Poisson arrivals at `rate` req/s (inf = all at once).
 
     Returns (records in send order, wall-clock duration of the measured phase).
     Warmup requests run sequentially first and are not recorded.
+    `transport` is an httpx transport override for the openai backend (tests).
     """
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {BACKENDS}, got {backend!r}")
     if not requests:
         raise ValueError("requests must be non-empty")
     if rate <= 0:
@@ -89,11 +120,9 @@ async def run_benchmark(
     rng = random.Random(seed)
     limit = asyncio.Semaphore(max_concurrency) if max_concurrency else None
 
-    async with grpc.aio.insecure_channel(target) as channel:
-        stub = inference_pb2_grpc.InferenceServiceStub(channel)
-
+    async with _sender(backend, target, model_name, timeout_s, transport) as send:
         for i in range(warmup):
-            rec = await send_one(stub, requests[i % len(requests)], f"warmup-{i}", model_name, timeout_s, 0.0)
+            rec = await send(requests[i % len(requests)], f"warmup-{i}", 0.0)
             if not rec.ok:
                 raise RuntimeError(f"warmup request failed: {rec.error}")
         if warmup:
@@ -101,9 +130,9 @@ async def run_benchmark(
 
         async def limited(i: int, req: BenchRequest, bench_start: float) -> RequestRecord:
             if limit is None:
-                return await send_one(stub, req, f"bench-{i}", model_name, timeout_s, bench_start)
+                return await send(req, f"bench-{i}", bench_start)
             async with limit:
-                return await send_one(stub, req, f"bench-{i}", model_name, timeout_s, bench_start)
+                return await send(req, f"bench-{i}", bench_start)
 
         bench_start = time.perf_counter()
         tasks = []

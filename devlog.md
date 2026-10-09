@@ -32,4 +32,5 @@
 | 2026-10-09 | varlen 批前向：多条序列的 prefill/decode token 展平成一批，`slot_mapping` 写 KV，flash `flash_attn_varlen_func(block_table)` 或 torch 逐序列参考实现。|
 | 2026-10-09 | `Scheduler`（纯 Python）：FIFO 准入（座位数 + token 预算 + 块数），块按需增长，块不足时抢占最新序列并 recompute，取消在下一步释放块。|
 | 2026-10-09 | `TorchEngine` 改为单调度循环：`BatchLoop` + `ModelRunner`（单 GPU 线程），并发与逐条输出一致；修复 CUDA graph 捕获后未执行导致首 token 错误。|
+| 2026-10-09 | 压测客户端加 `--backend openai`（httpx 流式 `/v1/chat/completions`），可直接压 vLLM；Makefile 加 `BACKEND`。|
 

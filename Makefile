@@ -13,6 +13,8 @@ MODEL ?= Qwen/Qwen2.5-1.5B-Instruct
 DEVICE ?= cuda
 DTYPE ?= fp32
 
+# BACKEND=openai with TARGET=http://localhost:8000 benchmarks vLLM instead.
+BACKEND ?= grpc
 TARGET ?= localhost:50052
 WORKLOAD ?= sharegpt
 NUM_REQUESTS ?= 200
@@ -62,11 +64,11 @@ $(SHAREGPT):
 	curl -fL --retry 3 -o $@.tmp $(SHAREGPT_URL) && mv $@.tmp $@
 
 bench:
-	$(PYTHON) benchmarks/load/bench_serving.py --target $(TARGET) --workload $(WORKLOAD) \
+	$(PYTHON) benchmarks/load/bench_serving.py --backend $(BACKEND) --target $(TARGET) --workload $(WORKLOAD) \
 		$(if $(filter sharegpt,$(WORKLOAD)),--dataset $(SHAREGPT) --tokenizer $(MODEL)) \
 		--num-requests $(NUM_REQUESTS) --rate $(RATE) \
 		--max-concurrency $(MAX_CONCURRENCY) \
-		--out benchmarks/results/serving-$(WORKLOAD)-rate$(RATE).json
+		--out benchmarks/results/serving-$(BACKEND)-$(WORKLOAD)-rate$(RATE)-c$(MAX_CONCURRENCY).json
 
 clean:
 	rm -rf bin core/build
