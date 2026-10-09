@@ -23,7 +23,8 @@ from inference.engine import (
     reserve_blocks,
 )
 from inference.kv_cache import KvShape, PagedKvCache
-from inference.qwen2.paged_attn import serving_page_size
+from inference.qwen2.decode_graph import DecodeGraph
+from inference.qwen2.paged_attn import flash_enabled, serving_page_size
 from inference.qwen2 import Qwen2CausalLM
 
 _log = logging.getLogger(__name__)
@@ -87,6 +88,9 @@ class TorchEngine:
         self._device = device
         self._pool = pool
         self._kv = kv_cache
+        self._decode_graph: DecodeGraph | None = None
+        self._decode_graph_key: tuple | None = None
+        self._decode_graph_failed = False
 
     @property
     def model(self):
@@ -255,6 +259,30 @@ class TorchEngine:
             )
         return self._tokenizer.encode(prompt, add_special_tokens=True)
 
+    def _graphed_decode_active(self) -> bool:
+        if self._decode_graph_failed or self._device != "cuda" or self._kv is None:
+            return False
+        # Token ids are int64. The kernel decision follows the KV dtype.
+        return flash_enabled(self._kv.layer_kv(0)[0].dtype)
+
+    def _graphed_decode(self, token_id: int, block_ids: list[int], seq_len: int):
+        """Replay a captured flash decode step. None means the caller should run eager."""
+        key = (id(self._kv), tuple(block_ids))
+        try:
+            if self._decode_graph is None or self._decode_graph_key != key:
+                graph = DecodeGraph(self._model, self._kv, block_ids)
+                logits = graph.capture(token_id, seq_len)
+                self._decode_graph = graph
+                self._decode_graph_key = key
+                return logits
+            return self._decode_graph.replay(token_id, seq_len)
+        except Exception:
+            _log.exception("flash decode graph failed; falling back to eager paged attention")
+            self._decode_graph = None
+            self._decode_graph_key = None
+            self._decode_graph_failed = True
+            return None
+
     def _forward_step(
         self,
         input_ids: list[int],
@@ -269,6 +297,10 @@ class TorchEngine:
             if self._kv is not None:
                 if not hasattr(self._model, "forward_paged"):
                     raise RuntimeError("paged KV requires Qwen2CausalLM")
+                if self._graphed_decode_active() and len(input_ids) == 1:
+                    logits = self._graphed_decode(input_ids[0], list(block_ids), seq_len)
+                    if logits is not None:
+                        return logits[0, -1, :].float().cpu(), None, seq_len + 1
                 logits = self._model.forward_paged(tensor, self._kv, list(block_ids), seq_len)
                 new_seq = seq_len + len(input_ids)
                 return logits[0, -1, :].float().cpu(), None, new_seq

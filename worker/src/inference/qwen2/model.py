@@ -15,7 +15,7 @@ import torch
 from torch import nn
 
 from inference.kv_cache import PagedKvCache
-from inference.qwen2.paged_attn import attend
+from inference.qwen2.paged_attn import attend, flash_decode
 
 _log = logging.getLogger(__name__)
 
@@ -174,6 +174,19 @@ class Attention(nn.Module):
         mixed = attend(query, key, value, cache, layer, block_ids, seq_len, self.num_kv_groups)
         return self._merge(mixed)
 
+    def forward_decode(
+        self,
+        hidden: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: PagedKvCache,
+        layer: int,
+        block_table: torch.Tensor,
+        seqlen: torch.Tensor,
+    ) -> torch.Tensor:
+        query, key, value = self._project(hidden, cos, sin)
+        return self._merge(flash_decode(query, key, value, cache, layer, block_table, seqlen))
+
     def _project(self, hidden: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
         batch, seq, _ = hidden.shape
         query = self.q_proj(hidden).view(batch, seq, self.num_heads, self.head_dim).transpose(1, 2)
@@ -225,6 +238,20 @@ class DecoderLayer(nn.Module):
         hidden = hidden + self.self_attn.forward_paged(normed, cos, sin, cache, layer, block_ids, seq_len)
         return hidden + self.mlp(self.post_attention_layernorm(hidden))
 
+    def forward_decode(
+        self,
+        hidden: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: PagedKvCache,
+        layer: int,
+        block_table: torch.Tensor,
+        seqlen: torch.Tensor,
+    ) -> torch.Tensor:
+        normed = self.input_layernorm(hidden)
+        hidden = hidden + self.self_attn.forward_decode(normed, cos, sin, cache, layer, block_table, seqlen)
+        return hidden + self.mlp(self.post_attention_layernorm(hidden))
+
 
 class Qwen2CausalLM(nn.Module):
     def __init__(self, dims: Qwen2Dims) -> None:
@@ -272,6 +299,27 @@ class Qwen2CausalLM(nn.Module):
         cos, sin = self.rotary_emb(hidden, position_ids)
         for index, layer in enumerate(self.layers):
             hidden = layer.forward_paged(hidden, cos, sin, cache, index, block_ids, seq_len)
+        return self.lm_head(self.norm(hidden))
+
+    def forward_decode(
+        self,
+        input_ids: torch.Tensor,
+        cache: PagedKvCache,
+        block_table: torch.Tensor,
+        position: torch.Tensor,
+        seqlen: torch.Tensor,
+    ) -> torch.Tensor:
+        """One new token. position is [1, 1] long; seqlen is [1] int32, both caller-owned.
+
+        A CUDA graph replays this with those tensors updated in place, so the
+        body must not rebuild them from Python integers.
+        """
+        if input_ids.shape != (1, 1):
+            raise ValueError("forward_decode expects input_ids [1, 1]")
+        hidden = self.embed_tokens(input_ids)
+        cos, sin = self.rotary_emb(hidden, position)
+        for index, layer in enumerate(self.layers):
+            hidden = layer.forward_decode(hidden, cos, sin, cache, index, block_table, seqlen)
         return self.lm_head(self.norm(hidden))
 
     @classmethod

@@ -154,6 +154,11 @@ def _backend(dtype: torch.dtype) -> str:
     return "flash"
 
 
+def flash_enabled(dtype: torch.dtype) -> bool:
+    """True when this dtype will actually run flash_attn_with_kvcache."""
+    return _backend(dtype) == "flash"
+
+
 def serving_page_size(dtype: torch.dtype) -> int:
     """Page size for a newly allocated slab. The torch path keeps the small default."""
     if _backend(dtype) == "flash":
@@ -191,6 +196,40 @@ def _flash_attend(
         v=value.transpose(1, 2).contiguous(),
         cache_seqlens=seqlens,
         block_table=table,
+        causal=True,
+    )
+    return out.transpose(1, 2).contiguous()
+
+
+def flash_decode(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    cache: PagedKvCache,
+    layer: int,
+    block_table: torch.Tensor,
+    seqlen: torch.Tensor,
+) -> torch.Tensor:
+    """q_len=1. block_table and seqlen are caller-owned so a CUDA graph can replay them.
+
+    seqlen is tokens already in the cache, shape [1] int32. The kernel appends key/value.
+    """
+    if cache.page_size % FLASH_PAGE_SIZE != 0:
+        raise ValueError(
+            "flash_attn_with_kvcache requires page_size to be a multiple of "
+            f"{FLASH_PAGE_SIZE}, got {cache.page_size}"
+        )
+    from flash_attn import flash_attn_with_kvcache
+
+    cache_k, cache_v = cache.layer_kv(layer)
+    out = flash_attn_with_kvcache(
+        query.transpose(1, 2).contiguous(),
+        cache_k,
+        cache_v,
+        k=key.transpose(1, 2).contiguous(),
+        v=value.transpose(1, 2).contiguous(),
+        cache_seqlens=seqlen,
+        block_table=block_table,
         causal=True,
     )
     return out.transpose(1, 2).contiguous()

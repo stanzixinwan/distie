@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import platform
 import sys
 import time
@@ -145,6 +146,7 @@ def environment(model_id: str, device: str, dtype: str) -> dict:
         "torch": torch.__version__,
         "transformers": transformers.__version__,
         "cuda": torch.version.cuda,
+        "attn": os.environ.get("DISTIE_ATTN", "torch"),
     }
     if device == "cuda":
         env["gpu"] = torch.cuda.get_device_name(0)
