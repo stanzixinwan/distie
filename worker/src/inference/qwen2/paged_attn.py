@@ -1,10 +1,13 @@
-"""Paged attention for one sequence.
+"""Paged attention over flash-layout KV pages.
 
 The torch backend writes new K/V straight into flash-layout pages, then
-indexes that sequence's pages into a dense tensor for SDPA. DISTIE_ATTN=flash
-instead calls flash_attn_with_kvcache, which reads the block table inside
-the kernel. fp32 stays on the torch path: the kernel is fp16/bf16 only.
-Batch stays 1 until the scheduler loop owns the GPU.
+indexes each sequence's pages into a dense tensor for SDPA. DISTIE_ATTN=flash
+instead calls a flash-attn kernel that reads the block table itself.
+fp32 stays on the torch path: the kernel is fp16/bf16 only.
+
+attend() serves one sequence. attend_batch() serves a flattened varlen
+batch: sequences packed back to back, cu_seqlens marking the boundaries,
+so prefill and decode rows share one forward without padding.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 from torch.nn import functional as F
@@ -233,3 +237,134 @@ def flash_decode(
         causal=True,
     )
     return out.transpose(1, 2).contiguous()
+
+
+@dataclass(frozen=True)
+class BatchSeq:
+    """One sequence in a varlen step: its pages, tokens already stored, new tokens."""
+
+    block_ids: tuple[int, ...]
+    past_len: int
+    q_len: int
+
+
+@dataclass(frozen=True)
+class BatchMeta:
+    """Device tensors for one flattened step. T = total new tokens, B = sequences."""
+
+    seqs: tuple[BatchSeq, ...]
+    positions: torch.Tensor  # [T] long, absolute positions for RoPE
+    slot_mapping: torch.Tensor  # [T] long, block * page_size + offset
+    cu_seqlens_q: torch.Tensor  # [B + 1] int32
+    cu_seqlens_k: torch.Tensor  # [B + 1] int32
+    max_seqlen_q: int
+    max_seqlen_k: int
+    block_table: torch.Tensor  # [B, max_pages] int32, padded with 0
+    last_index: torch.Tensor  # [B] long, row of each sequence's last new token
+
+
+def build_batch(seqs: Sequence[BatchSeq], cache: PagedKvCache, device) -> BatchMeta:
+    if not seqs:
+        raise ValueError("batch needs at least one sequence")
+    page = cache.page_size
+    positions: list[int] = []
+    slots: list[int] = []
+    cu_q = [0]
+    cu_k = [0]
+    tables: list[list[int]] = []
+    for seq in seqs:
+        if seq.q_len < 1 or seq.past_len < 0:
+            raise ValueError("each sequence needs q_len >= 1 and past_len >= 0")
+        total = seq.past_len + seq.q_len
+        cache.check_table(seq.block_ids, total)
+        for pos in range(seq.past_len, total):
+            positions.append(pos)
+            slots.append(int(seq.block_ids[pos // page]) * page + pos % page)
+        cu_q.append(cu_q[-1] + seq.q_len)
+        cu_k.append(cu_k[-1] + total)
+        tables.append(list(seq.block_ids[: pages_needed(total, page)]))
+    width = max(len(t) for t in tables)
+    padded = [t + [0] * (width - len(t)) for t in tables]
+    return BatchMeta(
+        seqs=tuple(seqs),
+        positions=torch.tensor(positions, dtype=torch.long, device=device),
+        slot_mapping=torch.tensor(slots, dtype=torch.long, device=device),
+        cu_seqlens_q=torch.tensor(cu_q, dtype=torch.int32, device=device),
+        cu_seqlens_k=torch.tensor(cu_k, dtype=torch.int32, device=device),
+        max_seqlen_q=max(s.q_len for s in seqs),
+        max_seqlen_k=max(s.past_len + s.q_len for s in seqs),
+        block_table=torch.tensor(padded, dtype=torch.int32, device=device),
+        last_index=torch.tensor([c - 1 for c in cu_q[1:]], dtype=torch.long, device=device),
+    )
+
+
+def write_slots(
+    cache_k: torch.Tensor,
+    cache_v: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+) -> None:
+    """key/value are [T, kv_heads, dim]; slot_mapping indexes the flattened pages."""
+    flat_k = cache_k.view(-1, cache_k.shape[-2], cache_k.shape[-1])
+    flat_v = cache_v.view(-1, cache_v.shape[-2], cache_v.shape[-1])
+    flat_k.index_copy_(0, slot_mapping, key)
+    flat_v.index_copy_(0, slot_mapping, value)
+
+
+def attend_batch(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    cache: PagedKvCache,
+    layer: int,
+    meta: BatchMeta,
+    n_rep: int,
+) -> torch.Tensor:
+    """query [T, heads, dim], key/value [T, kv_heads, dim], RoPE'd. Returns [T, heads, dim]."""
+    if query.ndim != 3 or key.shape[0] != query.shape[0] or value.shape != key.shape:
+        raise ValueError("attend_batch expects query [T, H, D] and key/value [T, KH, D]")
+    if int(meta.slot_mapping.shape[0]) != int(query.shape[0]):
+        raise ValueError("slot_mapping length does not match the batch")
+    cache_k, cache_v = cache.layer_kv(layer)
+    write_slots(cache_k, cache_v, meta.slot_mapping, key, value)
+    if _backend(query.dtype) == "flash":
+        return _flash_varlen(query, cache_k, cache_v, cache.page_size, meta)
+    pieces = []
+    start = 0
+    for seq in meta.seqs:
+        end = start + seq.q_len
+        q = query[start:end].transpose(0, 1).unsqueeze(0)
+        k, v = read_kv(cache_k, cache_v, seq.block_ids, seq.past_len + seq.q_len, cache.page_size)
+        k = _repeat_kv(k, n_rep).unsqueeze(0)
+        v = _repeat_kv(v, n_rep).unsqueeze(0)
+        pieces.append(_sdpa(q, k, v)[0].transpose(0, 1))
+        start = end
+    return torch.cat(pieces, dim=0)
+
+
+def _flash_varlen(
+    query: torch.Tensor,
+    cache_k: torch.Tensor,
+    cache_v: torch.Tensor,
+    page_size: int,
+    meta: BatchMeta,
+) -> torch.Tensor:
+    if page_size % FLASH_PAGE_SIZE != 0:
+        raise ValueError(
+            "flash paged attention requires page_size to be a multiple of "
+            f"{FLASH_PAGE_SIZE}, got {page_size}"
+        )
+    from flash_attn import flash_attn_varlen_func
+
+    return flash_attn_varlen_func(
+        query.contiguous(),
+        cache_k,
+        cache_v,
+        meta.cu_seqlens_q,
+        meta.cu_seqlens_k,
+        meta.max_seqlen_q,
+        meta.max_seqlen_k,
+        causal=True,
+        block_table=meta.block_table,
+    )
