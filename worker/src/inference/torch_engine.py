@@ -1,8 +1,8 @@
-"""HuggingFace causal-LM engine with optional paged KV.
+"""Causal-LM engine.
 
-Without a PagedKvCache, BlockPool is occupancy-only and HuggingFace owns
-past_key_values. With one, C++ Block IDs are the page table and this engine
-scatter/gathers KV so the HF cache is no longer the source of truth.
+With a PagedKvCache the model is the in-house Qwen2, which reads and writes
+the slab directly. Without one, a caller-supplied module (tests, or a plain
+HuggingFace model) still owns its own past_key_values.
 """
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ from inference.engine import (
     reserve_blocks,
 )
 from inference.kv_cache import KvShape, PagedKvCache
+from inference.qwen2.decode_graph import DecodeGraph
+from inference.qwen2.paged_attn import flash_enabled, serving_page_size
+from inference.qwen2 import Qwen2CausalLM
 
 _log = logging.getLogger(__name__)
 
@@ -85,6 +88,9 @@ class TorchEngine:
         self._device = device
         self._pool = pool
         self._kv = kv_cache
+        self._decode_graph: DecodeGraph | None = None
+        self._decode_graph_key: tuple | None = None
+        self._decode_graph_failed = False
 
     @property
     def model(self):
@@ -106,23 +112,29 @@ class TorchEngine:
         pool: BlockAllocator | None = None,
         dtype: str = "auto",
     ) -> TorchEngine:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
         resolved = resolve_device(device)
         torch_dtype = resolve_dtype(dtype, resolved)
         _log.info("loading torch model id=%s device=%s dtype=%s", model_id, resolved, torch_dtype)
+
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        model = AutoModelForCausalLM.from_pretrained(
+        hf_model = AutoModelForCausalLM.from_pretrained(
             model_id,
             dtype=torch_dtype,
             trust_remote_code=True,
         )
-        model.to(resolved)
-        model.eval()
+        hf_model.to(resolved)
+        hf_model.eval()
+        model = Qwen2CausalLM.from_hf(hf_model)
+        del hf_model
+        if resolved == "cuda":
+            import torch
+
+            torch.cuda.empty_cache()
         kv_cache = _maybe_paged_cache(model, pool, resolved)
         _log.info("torch model ready id=%s device=%s paged_kv=%s", model_id, resolved, kv_cache is not None)
         return cls(model, tokenizer, resolved, pool, kv_cache)
@@ -247,6 +259,30 @@ class TorchEngine:
             )
         return self._tokenizer.encode(prompt, add_special_tokens=True)
 
+    def _graphed_decode_active(self) -> bool:
+        if self._decode_graph_failed or self._device != "cuda" or self._kv is None:
+            return False
+        # Token ids are int64. The kernel decision follows the KV dtype.
+        return flash_enabled(self._kv.layer_kv(0)[0].dtype)
+
+    def _graphed_decode(self, token_id: int, block_ids: list[int], seq_len: int):
+        """Replay a captured flash decode step. None means the caller should run eager."""
+        key = (id(self._kv), tuple(block_ids))
+        try:
+            if self._decode_graph is None or self._decode_graph_key != key:
+                graph = DecodeGraph(self._model, self._kv, block_ids)
+                logits = graph.capture(token_id, seq_len)
+                self._decode_graph = graph
+                self._decode_graph_key = key
+                return logits
+            return self._decode_graph.replay(token_id, seq_len)
+        except Exception:
+            _log.exception("flash decode graph failed; falling back to eager paged attention")
+            self._decode_graph = None
+            self._decode_graph_key = None
+            self._decode_graph_failed = True
+            return None
+
     def _forward_step(
         self,
         input_ids: list[int],
@@ -257,51 +293,57 @@ class TorchEngine:
         import torch
 
         with torch.inference_mode():
-            hf_past = past
-            if self._kv is not None:
-                gathered = self._kv.gather(block_ids, seq_len)
-                hf_past = None if gathered is None else _to_hf_past(*gathered)
-
             tensor = torch.tensor([input_ids], dtype=torch.long, device=self._device)
+            if self._kv is not None:
+                if not hasattr(self._model, "forward_paged"):
+                    raise RuntimeError("paged KV requires Qwen2CausalLM")
+                if self._graphed_decode_active() and len(input_ids) == 1:
+                    logits = self._graphed_decode(input_ids[0], list(block_ids), seq_len)
+                    if logits is not None:
+                        return logits[0, -1, :].float().cpu(), None, seq_len + 1
+                logits = self._model.forward_paged(tensor, self._kv, list(block_ids), seq_len)
+                new_seq = seq_len + len(input_ids)
+                return logits[0, -1, :].float().cpu(), None, new_seq
+
             out = self._model(
                 input_ids=tensor,
-                past_key_values=hf_past,
+                past_key_values=past,
                 use_cache=True,
             )
             logits = out.logits[0, -1, :].float().cpu()
-            new_seq = seq_len + len(input_ids)
-            if self._kv is not None:
-                keys, values = _from_hf_cache(out.past_key_values)
-                self._kv.scatter(block_ids, seq_len, keys, values)
-                return logits, None, new_seq
-            return logits, out.past_key_values, new_seq
+            return logits, out.past_key_values, seq_len + len(input_ids)
 
 
 def _maybe_paged_cache(model, pool: BlockAllocator | None, device: str) -> PagedKvCache | None:
     if pool is None:
         return None
     num_blocks = getattr(pool, "num_blocks", None)
-    config = getattr(model, "config", None)
-    if num_blocks is None or config is None:
-        _log.warning("skipping paged KV: pool.num_blocks or model.config missing")
+    if num_blocks is None:
+        _log.warning("skipping paged KV: pool.num_blocks missing")
         return None
+    dims = getattr(model, "dims", None)
+    if dims is not None:
+        shape = KvShape(
+            num_layers=dims.num_hidden_layers,
+            num_kv_heads=dims.num_key_value_heads,
+            head_dim=dims.head_dim,
+        )
+    else:
+        config = getattr(model, "config", None)
+        if config is None:
+            _log.warning("skipping paged KV: model has no dims or config")
+            return None
+        shape = KvShape.from_hf_config(config)
     import torch
 
     dtype = next(model.parameters()).dtype
-    shape = KvShape.from_hf_config(config)
-    return PagedKvCache(shape, num_blocks=int(num_blocks), device=device, dtype=dtype)
-
-
-def _from_hf_cache(cache) -> tuple[list, list]:
-    keys = [layer.keys for layer in cache.layers]
-    values = [layer.values for layer in cache.layers]
-    return keys, values
-
-
-def _to_hf_past(keys: Sequence, values: Sequence):
-    from transformers.cache_utils import DynamicCache
-
-    return DynamicCache(list(zip(keys, values, strict=True)))
+    return PagedKvCache(
+        shape,
+        num_blocks=int(num_blocks),
+        device=device,
+        dtype=dtype,
+        page_size=serving_page_size(dtype),
+    )
 
 
 def _pick_token(logits, temperature: float) -> int:

@@ -1,0 +1,189 @@
+"""Dense Qwen2 forward against a tiny HuggingFace Qwen2ForCausalLM."""
+
+from __future__ import annotations
+
+import os
+import sys
+import types
+import unittest
+from pathlib import Path
+
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+import torch
+from transformers import Qwen2Config, Qwen2ForCausalLM
+
+from inference.kv_cache import KvShape, PagedKvCache
+from inference.qwen2 import Qwen2CausalLM
+
+
+def _tiny_config() -> Qwen2Config:
+    return Qwen2Config(
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=64,
+        rms_norm_eps=1e-6,
+        rope_theta=10000.0,
+        tie_word_embeddings=False,
+        attention_dropout=0.0,
+    )
+
+
+class Qwen2DenseParityTest(unittest.TestCase):
+    def test_logits_match_hf_eager(self) -> None:
+        torch.manual_seed(0)
+        config = _tiny_config()
+        hf = Qwen2ForCausalLM(config).eval()
+        ours = Qwen2CausalLM.from_hf(hf)
+        ids = torch.randint(0, config.vocab_size, (1, 7))
+        with torch.inference_mode():
+            ref = hf(ids, use_cache=False).logits
+            got = ours(ids)
+        err = (ref - got).abs().max().item()
+        self.assertLess(err, 1e-4)
+        self.assertEqual(int(ref[0, -1].argmax()), int(got[0, -1].argmax()))
+
+    def test_tied_embeddings_share_storage(self) -> None:
+        torch.manual_seed(1)
+        config = _tiny_config()
+        config.tie_word_embeddings = True
+        hf = Qwen2ForCausalLM(config).eval()
+        ours = Qwen2CausalLM.from_hf(hf)
+        self.assertIs(ours.lm_head.weight, ours.embed_tokens.weight)
+        ids = torch.randint(0, config.vocab_size, (1, 3))
+        with torch.inference_mode():
+            ref = hf(ids, use_cache=False).logits
+            got = ours(ids)
+        self.assertLess((ref - got).abs().max().item(), 1e-4)
+
+    def test_rejects_sliding_window(self) -> None:
+        config = _tiny_config()
+        config.layer_types = ["sliding_attention", "full_attention"]
+        hf = Qwen2ForCausalLM(_tiny_config()).eval()
+        hf.config.layer_types = ["sliding_attention", "full_attention"]
+        with self.assertRaises(ValueError):
+            Qwen2CausalLM.from_hf(hf)
+
+    def test_paged_decode_matches_dense(self) -> None:
+        torch.manual_seed(0)
+        config = _tiny_config()
+        ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval())
+        ids = torch.randint(0, config.vocab_size, (1, 7))
+        with torch.inference_mode():
+            dense = ours(ids)
+            cache = PagedKvCache(
+                KvShape(config.num_hidden_layers, config.num_key_value_heads, config.hidden_size // config.num_attention_heads),
+                num_blocks=4,
+                device="cpu",
+                dtype=torch.float32,
+                page_size=4,
+            )
+            table = [2, 0]
+            prefill = ours.forward_paged(ids[:, :4], cache, table, 0)
+            self.assertLess((prefill - dense[:, :4]).abs().max().item(), 1e-4)
+            seq_len = 4
+            for pos in range(4, ids.shape[1]):
+                step = ours.forward_paged(ids[:, pos : pos + 1], cache, table, seq_len)
+                self.assertLess((step[:, 0] - dense[:, pos]).abs().max().item(), 1e-4)
+                seq_len += 1
+
+    def test_flash_request_uses_block_table(self) -> None:
+        calls: dict = {}
+        fake = types.ModuleType("flash_attn")
+
+        def flash_attn_with_kvcache(q, k_cache, v_cache, k=None, v=None, cache_seqlens=None, block_table=None, causal=False, **kwargs):
+            calls["q"] = tuple(q.shape)
+            calls["k"] = None if k is None else tuple(k.shape)
+            calls["cache"] = tuple(k_cache.shape)
+            calls["table"] = block_table.tolist()
+            calls["seqlens"] = cache_seqlens.tolist()
+            calls["causal"] = causal
+            return torch.zeros_like(q)
+
+        fake.flash_attn_with_kvcache = flash_attn_with_kvcache
+        sys.modules["flash_attn"] = fake
+        os.environ["DISTIE_ATTN"] = "flash"
+        try:
+            config = _tiny_config()
+            ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval()).half()
+            ids = torch.randint(0, config.vocab_size, (1, 3))
+            cache = PagedKvCache(
+                KvShape(config.num_hidden_layers, config.num_key_value_heads, 8),
+                num_blocks=2,
+                device="cpu",
+                dtype=torch.float16,
+                page_size=256,
+            )
+            with torch.inference_mode():
+                ours.forward_paged(ids, cache, [1, 0], 0)
+            self.assertEqual(calls["q"], (1, 3, 4, 8))
+            self.assertEqual(calls["k"], (1, 3, 2, 8))
+            self.assertEqual(calls["cache"], (2, 256, 2, 8))
+            self.assertEqual(calls["table"], [[1]])
+            self.assertEqual(calls["seqlens"], [0])
+            self.assertTrue(calls["causal"])
+        finally:
+            os.environ.pop("DISTIE_ATTN", None)
+            sys.modules.pop("flash_attn", None)
+
+    def test_flash_rejects_small_pages(self) -> None:
+        def refuse(*args, **kwargs):
+            raise AssertionError("kernel must not run")
+
+        fake = types.ModuleType("flash_attn")
+        fake.flash_attn_with_kvcache = refuse
+        sys.modules["flash_attn"] = fake
+        os.environ["DISTIE_ATTN"] = "flash"
+        try:
+            config = _tiny_config()
+            ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval()).half()
+            ids = torch.randint(0, config.vocab_size, (1, 2))
+            cache = PagedKvCache(
+                KvShape(config.num_hidden_layers, config.num_key_value_heads, 8),
+                num_blocks=1,
+                device="cpu",
+                dtype=torch.float16,
+                page_size=16,
+            )
+            with self.assertRaises(ValueError):
+                with torch.inference_mode():
+                    ours.forward_paged(ids, cache, [0], 0)
+        finally:
+            os.environ.pop("DISTIE_ATTN", None)
+            sys.modules.pop("flash_attn", None)
+
+    def test_flash_falls_back_for_fp32(self) -> None:
+        os.environ["DISTIE_ATTN"] = "flash"
+        try:
+            config = _tiny_config()
+            ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval())
+            ids = torch.randint(0, config.vocab_size, (1, 3))
+            cache = PagedKvCache(
+                KvShape(config.num_hidden_layers, config.num_key_value_heads, 8),
+                num_blocks=2,
+                device="cpu",
+                dtype=torch.float32,
+                page_size=16,
+            )
+            with torch.inference_mode():
+                paged = ours.forward_paged(ids, cache, [0], 0)
+                dense = ours(ids)
+            self.assertLess((paged - dense).abs().max().item(), 1e-4)
+        finally:
+            os.environ.pop("DISTIE_ATTN", None)
+
+    def test_rejects_empty_sequence(self) -> None:
+        torch.manual_seed(0)
+        ours = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(_tiny_config()).eval())
+        with self.assertRaises(ValueError):
+            ours(torch.zeros(1, 0, dtype=torch.long))
+
+
+if __name__ == "__main__":
+    unittest.main()

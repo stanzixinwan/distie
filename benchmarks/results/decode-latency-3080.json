@@ -1,0 +1,42 @@
+{
+  "environment": {
+    "model": "Qwen/Qwen2.5-1.5B-Instruct",
+    "device": "cuda",
+    "dtype": "fp16",
+    "attn": "flash",
+    "page_size": 256,
+    "python": "3.12.15",
+    "platform": "Linux-6.18.40.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+    "torch": "2.14.1+cu130",
+    "cuda": "13.0",
+    "gpu": "NVIDIA GeForce RTX 3080 Laptop GPU"
+  },
+  "prompt_tokens": 46,
+  "max_new_tokens": 64,
+  "warmup": 2,
+  "repeats": 5,
+  "tokens_match": true,
+  "hf": {
+    "ttft_ms": 27.53486999999666,
+    "tpot_ms": 18.071016666666882,
+    "tpot_ms_runs": [
+      18.560232952380836,
+      18.064309079365092,
+      18.139852555555485,
+      18.071016666666882,
+      17.181114507936385
+    ]
+  },
+  "flash": {
+    "ttft_ms": 29.625568000000158,
+    "tpot_ms": 12.218228730158815,
+    "tpot_ms_runs": [
+      12.109188698412746,
+      12.218228730158815,
+      12.22161306349207,
+      12.15049068253953,
+      12.408412285714302
+    ]
+  },
+  "flash_tpot_le_hf": true
+}

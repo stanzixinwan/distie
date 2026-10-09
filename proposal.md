@@ -149,7 +149,7 @@ flowchart LR
 ### 阶段 1：块分配与分页 KV 原型 ✅
 
 - C++ `BlockPool` + Pybind11 绑定；`TorchEngine` 以块 ID 为页表，KV 存于预分配 torch slab。
-- **已知局限**：仍依赖 HF 前向，每步需 gather/scatter；单请求串行执行。这些将在阶段 3、4 解决。
+- **已知局限**：单请求串行执行，留到阶段 4。阶段 3 已换成自写 Qwen2，attention 直接读写分页 KV。
 
 
 
@@ -162,11 +162,11 @@ flowchart LR
 
 
 
-### 阶段 3：自有模型前向 + Paged Attention
+### 阶段 3：自有模型前向 + Paged Attention ✅
 
-- 实现 Qwen2 前向，attention 直接读写 paged slab，移除 gather/scatter。
-- 先 PyTorch 索引版，再接入 paged attention kernel。
-- **验收**：通过正确性测试；batch=1 decode 延迟不劣于 HF `generate`。
+- 自写 Qwen2 前向，attention 直接读写 paged slab，服务路径不再 gather/scatter。
+- 先 PyTorch 索引版（fp32 逐 token 验收），再 `flash_attn_with_kvcache`。页大小须为 256 的倍数；decode 把一步前向录成 CUDA graph，避免逐层 Python 把 GPU 挂空。
+- **验收**（RTX 3080 Laptop，WSL2，Qwen2.5-1.5B，2026-10-09）：fp32 / fp16 与 HF 贪心逐 token 一致。batch=1 decode TPOT：flash 12.2 ms，HF `generate` 18.1 ms。见 `benchmarks/results/stage3-3080.md`。
 
 
 
@@ -356,7 +356,7 @@ Local numbers are for iteration and debugging. Numbers reported externally come 
 ### Stage 1: Block allocation and paged-KV prototype ✅
 
 - C++ `BlockPool` plus Pybind11 bindings. `TorchEngine` uses block IDs as the page table; KV lives in a preallocated torch slab.
-- **Known limits**: the forward pass is still HuggingFace's, so every step gathers and scatters, and requests run one at a time. Stages 3 and 4 remove those limits.
+- **Known limits**: requests still run one at a time; stage 4 removes that. Stage 3 replaced the HuggingFace forward, so attention reads and writes the paged KV directly.
 
 ### Stage 2: Measurement baseline ✅
 
@@ -365,11 +365,11 @@ Local numbers are for iteration and debugging. Numbers reported externally come 
 - **Acceptance**: one command produces a TTFT / TPOT / throughput report (`make bench`, concurrency 1 by default).
 - **Local baseline** (RTX 3080 Laptop, WSL2, Qwen2.5-1.5B, 2026-10-09): fp32 and fp16 match HF greedy decoding token for token. ShareGPT, 200 requests: 40.8 output tok/s, TTFT p50 29.6 ms, TPOT p50 23.7 ms. See `benchmarks/results/baseline-3080.md`.
 
-### Stage 3: In-house forward pass + paged attention
+### Stage 3: In-house forward pass + paged attention ✅
 
-- Implement the Qwen2 forward pass so attention reads and writes the paged slab directly, and remove gather/scatter.
-- PyTorch indexing first, then a paged attention kernel.
-- **Acceptance**: correctness tests pass, and batch=1 decode latency is no worse than HF `generate`.
+- In-house Qwen2 forward. Attention reads and writes the paged slab directly, and the serving path no longer gathers or scatters.
+- PyTorch indexing first (fp32 is checked token by token), then `flash_attn_with_kvcache`. The page size must be a multiple of 256. Decode records one forward step as a CUDA graph so per-layer Python does not leave the GPU idle.
+- **Acceptance** (RTX 3080 Laptop, WSL2, Qwen2.5-1.5B, 2026-10-09): fp32 and fp16 match HF greedy decoding token for token. Batch=1 decode TPOT: flash 12.2 ms, HF `generate` 18.1 ms. See `benchmarks/results/stage3-3080.md`.
 
 ### Stage 4: Continuous Batching
 

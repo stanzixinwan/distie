@@ -8,6 +8,7 @@
     "torch": "2.14.1+cu130",
     "transformers": "5.19.0",
     "cuda": "13.0",
+    "attn": "torch",
     "gpu": "NVIDIA GeForce RTX 3080 Laptop GPU"
   },
   "max_new_tokens": 32,
@@ -21,7 +22,7 @@
     "passed": 8,
     "greedy_match": 8,
     "min_top1_agreement": 1.0,
-    "max_abs_logit_err": 0.015625,
+    "max_abs_logit_err": 0.0703125,
     "all_passed": true
   },
   "results": [
@@ -32,7 +33,7 @@
       "candidate_tokens": 10,
       "first_divergence": null,
       "top1_agreement": 1.0,
-      "max_abs_logit_err": 0.015625,
+      "max_abs_logit_err": 0.0546875,
       "passed": true,
       "greedy_match": true
     },
@@ -43,7 +44,7 @@
       "candidate_tokens": 8,
       "first_divergence": null,
       "top1_agreement": 1.0,
-      "max_abs_logit_err": 0.0078125,
+      "max_abs_logit_err": 0.046875,
       "passed": true,
       "greedy_match": true
     },
@@ -54,7 +55,7 @@
       "candidate_tokens": 32,
       "first_divergence": null,
       "top1_agreement": 1.0,
-      "max_abs_logit_err": 0.0078125,
+      "max_abs_logit_err": 0.046875,
       "passed": true,
       "greedy_match": true
     },
@@ -65,7 +66,7 @@
       "candidate_tokens": 32,
       "first_divergence": null,
       "top1_agreement": 1.0,
-      "max_abs_logit_err": 0.0078125,
+      "max_abs_logit_err": 0.0703125,
       "passed": true,
       "greedy_match": true
     },
@@ -76,7 +77,7 @@
       "candidate_tokens": 32,
       "first_divergence": null,
       "top1_agreement": 1.0,
-      "max_abs_logit_err": 0.0078125,
+      "max_abs_logit_err": 0.05078125,
       "passed": true,
       "greedy_match": true
     },
@@ -87,7 +88,7 @@
       "candidate_tokens": 32,
       "first_divergence": null,
       "top1_agreement": 1.0,
-      "max_abs_logit_err": 0.0078125,
+      "max_abs_logit_err": 0.0546875,
       "passed": true,
       "greedy_match": true
     },
@@ -98,7 +99,7 @@
       "candidate_tokens": 32,
       "first_divergence": null,
       "top1_agreement": 1.0,
-      "max_abs_logit_err": 0.0078125,
+      "max_abs_logit_err": 0.046875,
       "passed": true,
       "greedy_match": true
     },
@@ -109,7 +110,7 @@
       "candidate_tokens": 17,
       "first_divergence": null,
       "top1_agreement": 1.0,
-      "max_abs_logit_err": 0.015625,
+      "max_abs_logit_err": 0.046875,
       "passed": true,
       "greedy_match": true
     }

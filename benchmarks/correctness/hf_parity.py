@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import platform
 import sys
 import time
@@ -82,9 +83,21 @@ def reference_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: 
     return ids, logits
 
 
-def check_prompt(engine, index: int, prompt: str, max_new_tokens: int, thresholds: Thresholds) -> PromptResult:
+def check_prompt(engine, reference, index: int, prompt: str, max_new_tokens: int, thresholds: Thresholds) -> PromptResult:
     prompt_ids = engine.encode(prompt)
-    ref_ids, ref_logits = reference_generate(engine.model, engine.tokenizer, prompt_ids, max_new_tokens)
+    ref_ids, ref_logits = reference_generate(reference, engine.tokenizer, prompt_ids, max_new_tokens)
+    return score_trace(engine, index, prompt_ids, ref_ids, ref_logits, max_new_tokens, thresholds)
+
+
+def score_trace(
+    engine,
+    index: int,
+    prompt_ids: list[int],
+    ref_ids: list[int],
+    ref_logits,
+    max_new_tokens: int,
+    thresholds: Thresholds,
+) -> PromptResult:
     if not ref_ids:
         raise RuntimeError(f"prompt {index}: HF generate produced no tokens")
     free = engine.trace(prompt_ids, max_new_tokens)
@@ -100,13 +113,13 @@ def check_prompt(engine, index: int, prompt: str, max_new_tokens: int, threshold
     )
 
 
-def run(engine, prompts: list[str], max_new_tokens: int, thresholds: Thresholds) -> list[PromptResult]:
+def run(engine, prompts: list[str], max_new_tokens: int, thresholds: Thresholds, reference) -> list[PromptResult]:
     if not engine.paged:
         raise RuntimeError("engine has no PagedKvCache; parity would only test HF against itself")
     results = []
     for i, prompt in enumerate(prompts):
         started = time.perf_counter()
-        result = check_prompt(engine, i, prompt, max_new_tokens, thresholds)
+        result = check_prompt(engine, reference, i, prompt, max_new_tokens, thresholds)
         _log.info(
             "prompt=%s passed=%s divergence=%s top1=%.4f max_err=%.3e elapsed_s=%.1f",
             i,
@@ -133,6 +146,7 @@ def environment(model_id: str, device: str, dtype: str) -> dict:
         "torch": torch.__version__,
         "transformers": transformers.__version__,
         "cuda": torch.version.cuda,
+        "attn": os.environ.get("DISTIE_ATTN", "torch"),
     }
     if device == "cuda":
         env["gpu"] = torch.cuda.get_device_name(0)
@@ -168,23 +182,104 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return args
 
 
+def _encode(tokenizer, prompt: str) -> list[int]:
+    if getattr(tokenizer, "chat_template", None):
+        return tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=False,
+        )
+    return tokenizer.encode(prompt, add_special_tokens=True)
+
+
+def _collect_references(args, prompts: list[str]):
+    """Run HF generate, then drop that model before the candidate is built.
+
+    Two full 1.5B copies do not fit comfortably beside activations on a 16 GB GPU.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from inference.torch_engine import resolve_dtype
+
+    device = args.device
+    dtype = resolve_dtype(args.dtype, device)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+    reference = AutoModelForCausalLM.from_pretrained(args.model, dtype=dtype, trust_remote_code=True)
+    reference.to(device)
+    reference.eval()
+    rows = []
+    try:
+        for prompt in prompts:
+            prompt_ids = _encode(tokenizer, prompt)
+            ref_ids, ref_logits = reference_generate(reference, tokenizer, prompt_ids, args.max_new_tokens)
+            rows.append((prompt_ids, ref_ids, ref_logits.cpu()))
+    finally:
+        del reference
+        if device == "cuda":
+            torch.cuda.empty_cache()
+    return tokenizer, rows, dtype
+
+
+def _candidate_engine(args, tokenizer, dtype):
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    from inference.kv_cache import KvShape, PagedKvCache
+    from inference.qwen2.paged_attn import serving_page_size
+    from inference.native import load_block_pool
+    from inference.qwen2 import Qwen2CausalLM
+    from inference.torch_engine import TorchEngine
+
+    hf_model = AutoModelForCausalLM.from_pretrained(args.model, dtype=dtype, trust_remote_code=True)
+    hf_model.to(args.device)
+    hf_model.eval()
+    model = Qwen2CausalLM.from_hf(hf_model)
+    del hf_model
+    if args.device == "cuda":
+        torch.cuda.empty_cache()
+    pool = load_block_pool(args.num_blocks)
+    shape = KvShape(model.dims.num_hidden_layers, model.dims.num_key_value_heads, model.dims.head_dim)
+    cache = PagedKvCache(
+        shape,
+        num_blocks=pool.num_blocks,
+        device=args.device,
+        dtype=dtype,
+        page_size=serving_page_size(dtype),
+    )
+    return TorchEngine(model, tokenizer, args.device, pool=pool, kv_cache=cache)
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     args = _parse_args(argv)
 
     try:
-        from inference.native import load_block_pool
-        from inference.torch_engine import TorchEngine
-
         prompts = load_prompts(args.prompts)
-        pool = load_block_pool(args.num_blocks)
-        engine = TorchEngine.load(args.model, device=args.device, pool=pool, dtype=args.dtype)
+        tokenizer, rows, dtype = _collect_references(args, prompts)
+        engine = _candidate_engine(args, tokenizer, dtype)
     except (ImportError, OSError, ValueError, RuntimeError) as exc:
         _log.error("setup failed: %s", exc)
         return 2
 
     thresholds = default_thresholds(args.dtype)
-    results = run(engine, prompts, args.max_new_tokens, thresholds)
+    results = []
+    for index, (prompt_ids, ref_ids, ref_logits) in enumerate(rows):
+        started = time.perf_counter()
+        result = score_trace(engine, index, prompt_ids, ref_ids, ref_logits, args.max_new_tokens, thresholds)
+        _log.info(
+            "prompt=%s passed=%s divergence=%s top1=%.4f max_err=%.3e elapsed_s=%.1f",
+            index,
+            result.passed,
+            result.first_divergence,
+            result.top1_agreement,
+            result.max_abs_logit_err,
+            time.perf_counter() - started,
+        )
+        results.append(result)
     summary = summarize(results)
     print(format_table(results))
     print(json.dumps(summary, indent=2))

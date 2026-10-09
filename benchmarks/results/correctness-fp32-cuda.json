@@ -8,6 +8,7 @@
     "torch": "2.14.1+cu130",
     "transformers": "5.19.0",
     "cuda": "13.0",
+    "attn": "torch",
     "gpu": "NVIDIA GeForce RTX 3080 Laptop GPU"
   },
   "max_new_tokens": 32,
