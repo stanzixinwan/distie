@@ -149,7 +149,7 @@ flowchart LR
 ### 阶段 1：块分配与分页 KV 原型 ✅
 
 - C++ `BlockPool` + Pybind11 绑定；`TorchEngine` 以块 ID 为页表，KV 存于预分配 torch slab。
-- **已知局限**：单请求串行执行，留到阶段 4。阶段 3 已换成自写 Qwen2，attention 直接读写分页 KV。
+- **已知局限**：单请求串行执行（阶段 4 已改为单调度循环批处理）。阶段 3 已换成自写 Qwen2，attention 直接读写分页 KV。
 
 
 
@@ -170,11 +170,13 @@ flowchart LR
 
 
 
-### 阶段 4：Continuous Batching
+### 阶段 4：Continuous Batching（本地 ✅，vLLM 对比待做）
 
 - Scheduler Loop：准入、recompute 抢占、prefill/decode 混合批次。
 - Servicer 改为纯 I/O，请求通过队列与调度循环交互；支持客户端取消。
 - **验收**：负载 A 下吞吐显著高于 HF 基线；在云上与 vLLM 同环境对比，给出差距分析。
+- **本地结果**（RTX 3080 Laptop，WSL2，Qwen2.5-1.5B fp16，flash，2026-10-09）：并发与逐条生成逐 token 一致；ShareGPT 200 请求、并发 64：978.9 output tok/s，是阶段 2 基线 40.8 tok/s 的 24 倍。见 `benchmarks/results/stage4-3080.md`。
+- **待做**：云上 vLLM 同环境对比与差距分析（`make bench BACKEND=openai`，步骤见同一文件）。
 
 
 
@@ -356,7 +358,7 @@ Local numbers are for iteration and debugging. Numbers reported externally come 
 ### Stage 1: Block allocation and paged-KV prototype ✅
 
 - C++ `BlockPool` plus Pybind11 bindings. `TorchEngine` uses block IDs as the page table; KV lives in a preallocated torch slab.
-- **Known limits**: requests still run one at a time; stage 4 removes that. Stage 3 replaced the HuggingFace forward, so attention reads and writes the paged KV directly.
+- **Known limits**: requests ran one at a time (stage 4 replaced this with one batching scheduler loop). Stage 3 replaced the HuggingFace forward, so attention reads and writes the paged KV directly.
 
 ### Stage 2: Measurement baseline ✅
 
@@ -371,11 +373,13 @@ Local numbers are for iteration and debugging. Numbers reported externally come 
 - PyTorch indexing first (fp32 is checked token by token), then `flash_attn_with_kvcache`. The page size must be a multiple of 256. Decode records one forward step as a CUDA graph so per-layer Python does not leave the GPU idle.
 - **Acceptance** (RTX 3080 Laptop, WSL2, Qwen2.5-1.5B, 2026-10-09): fp32 and fp16 match HF greedy decoding token for token. Batch=1 decode TPOT: flash 12.2 ms, HF `generate` 18.1 ms. See `benchmarks/results/stage3-3080.md`.
 
-### Stage 4: Continuous Batching
+### Stage 4: Continuous Batching (local ✅, vLLM comparison open)
 
 - Scheduler loop: admission, recompute preemption, and mixed prefill/decode batches.
 - The servicer becomes pure I/O. Requests meet the scheduler through a queue. Client cancellation is supported.
 - **Acceptance**: under workload A, throughput is clearly above the HF baseline. On the cloud, compare with vLLM in the same environment and explain the gap.
+- **Local result** (RTX 3080 Laptop, WSL2, Qwen2.5-1.5B fp16, flash, 2026-10-09): concurrent generation matches one-at-a-time generation token for token. ShareGPT, 200 requests, concurrency 64: 978.9 output tok/s, 24× the stage-2 baseline of 40.8 tok/s. See `benchmarks/results/stage4-3080.md`.
+- **Open**: the same-environment vLLM comparison and gap analysis on the cloud (`make bench BACKEND=openai`; steps in the same file).
 
 ### Stage 5: C++ KV block manager
 
