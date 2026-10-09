@@ -248,8 +248,9 @@ class TorchEngineTest(unittest.IsolatedAsyncioTestCase):
             )
         ]
         self.assertEqual(len(events), 3)
-        self.assertEqual(pool.freed, pool.allocated)
+        self.assertEqual(pool.num_free, pool.num_blocks)
         self.assertGreaterEqual(len(pool.allocated[0]), 1)
+        await engine.close()
 
     def test_paged_cache_requires_pool(self) -> None:
         import torch
