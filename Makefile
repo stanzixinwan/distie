@@ -17,6 +17,9 @@ TARGET ?= localhost:50052
 WORKLOAD ?= sharegpt
 NUM_REQUESTS ?= 200
 RATE ?= inf
+# TorchEngine runs one forward at a time on a shared KV slab. Leave this at 1
+# until the scheduler loop owns the GPU; a higher value races the cache.
+MAX_CONCURRENCY ?= 1
 SHAREGPT := benchmarks/data/ShareGPT_V3_unfiltered_cleaned_split.json
 SHAREGPT_URL := https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 
@@ -62,6 +65,7 @@ bench:
 	$(PYTHON) benchmarks/load/bench_serving.py --target $(TARGET) --workload $(WORKLOAD) \
 		$(if $(filter sharegpt,$(WORKLOAD)),--dataset $(SHAREGPT) --tokenizer $(MODEL)) \
 		--num-requests $(NUM_REQUESTS) --rate $(RATE) \
+		--max-concurrency $(MAX_CONCURRENCY) \
 		--out benchmarks/results/serving-$(WORKLOAD)-rate$(RATE).json
 
 clean:

@@ -2,7 +2,7 @@
 
 **Project Proposal: DistIE — Distributed Inference Engine with Cache-Aware Scheduling and Routing**
 
-> 状态：进行中（阶段 0、1 已完成原型，见 §6）｜最后更新：2026-10
+> 状态：进行中（阶段 0–2 已完成，见 §6）｜最后更新：2026-10
 
 ---
 
@@ -153,11 +153,12 @@ flowchart LR
 
 
 
-### 阶段 2：度量基线
+### 阶段 2：度量基线 ✅
 
 - 清理仓库（移除构建产物与缓存文件）；项目迁入 WSL 文件系统，`.ps1` 脚本替换为 `.sh` / Makefile。
 - 正确性测试集与压测脚本（§5），测出当前版本与 HF `generate` 的基线数据。
-- **验收**：一条命令产出 TTFT / TPOT / 吞吐报告。
+- **验收**：一条命令产出 TTFT / TPOT / 吞吐报告（`make bench`，默认并发 1）。
+- **本地基线**（RTX 3080 Laptop，WSL2，Qwen2.5-1.5B，2026-10-09）：fp32 / fp16 与 HF 贪心逐 token 一致；ShareGPT 200 请求 40.8 output tok/s，TTFT p50 29.6 ms，TPOT p50 23.7 ms。见 `benchmarks/results/baseline-3080.md`。
 
 
 
