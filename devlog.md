@@ -30,4 +30,5 @@
 | 2026-10-09 | `DISTIE_ATTN=flash` 用 `flash_attn_with_kvcache` 按 block table 追加 KV（页大小须为 256 的倍数）；fp32 或未安装则记错误并退回 torch 索引。|
 | 2026-10-09 | 阶段 3 验收（3080）：fp32/fp16 与 HF 贪心逐 token 一致；flash decode 录成 CUDA graph 后 TPOT 12.2 ms，低于 HF `generate` 的 18.1 ms。|
 | 2026-10-09 | varlen 批前向：多条序列的 prefill/decode token 展平成一批，`slot_mapping` 写 KV，flash `flash_attn_varlen_func(block_table)` 或 torch 逐序列参考实现。|
+| 2026-10-09 | `Scheduler`（纯 Python）：FIFO 准入（座位数 + token 预算 + 块数），块按需增长，块不足时抢占最新序列并 recompute，取消在下一步释放块。|
 
