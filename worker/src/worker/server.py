@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import signal
+from collections.abc import Callable
 
 import grpc
 from grpc_reflection.v1alpha import reflection
@@ -45,14 +48,58 @@ def build_server(
     return server, port
 
 
-async def serve(cfg: Config) -> None:
-    server, _port = build_server(cfg)
-    await server.start()
+async def serve(
+    cfg: Config,
+    engine: Engine | None = None,
+    stop: asyncio.Event | None = None,
+) -> None:
+    """Run until SIGINT/SIGTERM (or `stop` is set), then drain and close.
+
+    Shutdown order: stop the server first, so in-flight streams finish within
+    the grace period or are cancelled (their blocks are freed), then close the
+    engine, which stops its GPU loop. A second signal while draining falls back
+    to the default handler and interrupts the drain.
+    """
+    if engine is None:
+        engine = _build_engine(cfg)
+    stop = stop or asyncio.Event()
+    server, _port = build_server(cfg, engine=engine)
+    remove_handlers = _install_signal_handlers(stop)
     try:
-        await server.wait_for_termination()
-    except KeyboardInterrupt:
-        _log.info("shutdown signal received")
-        await server.stop(cfg.shutdown_grace_s)
+        await server.start()
+        await stop.wait()
+        _log.info("shutdown started grace_s=%s", cfg.shutdown_grace_s)
+    finally:
+        remove_handlers()
+        try:
+            await server.stop(cfg.shutdown_grace_s)
+        finally:
+            await engine.close()
+            _log.info("worker stopped worker_id=%s", cfg.worker_id)
+
+
+def _install_signal_handlers(stop: asyncio.Event) -> Callable[[], None]:
+    loop = asyncio.get_running_loop()
+    signals = (signal.SIGINT, signal.SIGTERM)
+
+    def remove() -> None:
+        for sig in signals:
+            loop.remove_signal_handler(sig)
+
+    def on_signal(sig: signal.Signals) -> None:
+        _log.info("shutdown signal received signal=%s", sig.name)
+        remove()
+        stop.set()
+
+    try:
+        for sig in signals:
+            loop.add_signal_handler(sig, on_signal, sig)
+    except NotImplementedError:
+        # Windows event loops have no add_signal_handler; KeyboardInterrupt
+        # still cancels serve() and the finally block runs the same shutdown.
+        _log.warning("signal handlers unavailable on this platform")
+        return lambda: None
+    return remove
 
 
 def _build_engine(cfg: Config) -> Engine:

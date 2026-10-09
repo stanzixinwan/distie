@@ -15,7 +15,12 @@ def main() -> None:
         stream=sys.stdout,
     )
     cfg = load()
-    asyncio.run(serve(cfg))
+    try:
+        asyncio.run(serve(cfg))
+    except KeyboardInterrupt:
+        # A second Ctrl-C during the drain; serve() already logged the shutdown.
+        logging.getLogger("worker").warning("forced exit before drain finished")
+        sys.exit(130)
 
 
 if __name__ == "__main__":

@@ -34,4 +34,5 @@
 | 2026-10-09 | `TorchEngine` 改为单调度循环：`BatchLoop` + `ModelRunner`（单 GPU 线程），并发与逐条输出一致；修复 CUDA graph 捕获后未执行导致首 token 错误。|
 | 2026-10-09 | 压测客户端加 `--backend openai`（httpx 流式 `/v1/chat/completions`），可直接压 vLLM；Makefile 加 `BACKEND`。|
 | 2026-10-09 | 阶段 4 本地验收（3080）：ShareGPT 200 并发 64 达 978.9 output tok/s（基线 40.8）；`make bench` 默认并发改为 64；vLLM 对比待云上做。|
+| 2026-10-09 | Worker 优雅退出：SIGINT/SIGTERM 置 stop 事件 → `server.stop(grace)` → `engine.close()`；`Engine` 协议加 `close()`。|
 
