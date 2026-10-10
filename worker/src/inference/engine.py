@@ -38,6 +38,10 @@ class Engine(Protocol):
 
     def generate(self, req: GenerateRequest) -> AsyncIterator[TokenEvent]: ...
 
+    async def close(self) -> None:
+        """Release background tasks and threads; called once at shutdown."""
+        ...
+
 
 @dataclass(frozen=True)
 class GenerateRequest:
@@ -73,6 +77,9 @@ class FakeEngine:
             raise ValueError("token_delay_s must be >= 0")
         self._token_delay_s = token_delay_s
         self._pool = pool
+
+    async def close(self) -> None:
+        pass
 
     async def generate(self, req: GenerateRequest) -> AsyncIterator[TokenEvent]:
         started = time.perf_counter()

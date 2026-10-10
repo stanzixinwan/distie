@@ -15,7 +15,7 @@ import torch
 from torch import nn
 
 from inference.kv_cache import PagedKvCache
-from inference.qwen2.paged_attn import attend, flash_decode
+from inference.qwen2.paged_attn import BatchMeta, attend, attend_batch, flash_decode
 
 _log = logging.getLogger(__name__)
 
@@ -187,6 +187,28 @@ class Attention(nn.Module):
         query, key, value = self._project(hidden, cos, sin)
         return self._merge(flash_decode(query, key, value, cache, layer, block_table, seqlen))
 
+    def forward_batch(
+        self,
+        hidden: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: PagedKvCache,
+        layer: int,
+        meta: BatchMeta,
+    ) -> torch.Tensor:
+        # hidden is [1, T, hidden]: the flattened batch is one long row for the projections.
+        query, key, value = self._project(hidden, cos, sin)
+        mixed = attend_batch(
+            query[0].transpose(0, 1),
+            key[0].transpose(0, 1),
+            value[0].transpose(0, 1),
+            cache,
+            layer,
+            meta,
+            self.num_kv_groups,
+        )
+        return self._merge(mixed.transpose(0, 1).unsqueeze(0))
+
     def _project(self, hidden: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
         batch, seq, _ = hidden.shape
         query = self.q_proj(hidden).view(batch, seq, self.num_heads, self.head_dim).transpose(1, 2)
@@ -250,6 +272,19 @@ class DecoderLayer(nn.Module):
     ) -> torch.Tensor:
         normed = self.input_layernorm(hidden)
         hidden = hidden + self.self_attn.forward_decode(normed, cos, sin, cache, layer, block_table, seqlen)
+        return hidden + self.mlp(self.post_attention_layernorm(hidden))
+
+    def forward_batch(
+        self,
+        hidden: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: PagedKvCache,
+        layer: int,
+        meta: BatchMeta,
+    ) -> torch.Tensor:
+        normed = self.input_layernorm(hidden)
+        hidden = hidden + self.self_attn.forward_batch(normed, cos, sin, cache, layer, meta)
         return hidden + self.mlp(self.post_attention_layernorm(hidden))
 
 
@@ -321,6 +356,19 @@ class Qwen2CausalLM(nn.Module):
         for index, layer in enumerate(self.layers):
             hidden = layer.forward_decode(hidden, cos, sin, cache, index, block_table, seqlen)
         return self.lm_head(self.norm(hidden))
+
+    def forward_batch(self, input_ids: torch.Tensor, cache: PagedKvCache, meta: BatchMeta) -> torch.Tensor:
+        """Flattened varlen step. input_ids [T] -> logits [B, vocab] at each sequence's last token."""
+        if input_ids.ndim != 1 or input_ids.shape[0] != meta.positions.shape[0]:
+            raise ValueError("forward_batch expects input_ids [T] matching meta.positions")
+        if cache.shape.num_layers != self.dims.num_hidden_layers:
+            raise ValueError("KV cache layer count does not match the model")
+        hidden = self.embed_tokens(input_ids).unsqueeze(0)
+        cos, sin = self.rotary_emb(hidden, meta.positions.unsqueeze(0))
+        for index, layer in enumerate(self.layers):
+            hidden = layer.forward_batch(hidden, cos, sin, cache, index, meta)
+        last = hidden[0].index_select(0, meta.last_index)
+        return self.lm_head(self.norm(last))
 
     @classmethod
     def from_hf(cls, hf_model) -> Qwen2CausalLM:

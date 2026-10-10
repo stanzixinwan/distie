@@ -1,14 +1,17 @@
 """Causal-LM engine.
 
 With a PagedKvCache the model is the in-house Qwen2, which reads and writes
-the slab directly. Without one, a caller-supplied module (tests, or a plain
-HuggingFace model) still owns its own past_key_values.
+the slab directly, and generate() joins one shared BatchLoop: concurrent
+requests are batched step by step instead of running one after another.
+Without one, a caller-supplied module (tests, or a plain HuggingFace model)
+still owns its own past_key_values and runs one request at a time.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -22,10 +25,13 @@ from inference.engine import (
     release_blocks,
     reserve_blocks,
 )
-from inference.kv_cache import KvShape, PagedKvCache
+from inference.batch_loop import BatchLoop
+from inference.kv_cache import KvShape, PagedKvCache, pages_needed
+from inference.model_runner import ModelRunner
 from inference.qwen2.decode_graph import DecodeGraph
 from inference.qwen2.paged_attn import flash_enabled, serving_page_size
 from inference.qwen2 import Qwen2CausalLM
+from inference.scheduler import DEFAULT_MAX_SEQS, DEFAULT_TOKEN_BUDGET, Scheduler, Sequence as SchedSeq
 
 _log = logging.getLogger(__name__)
 
@@ -89,8 +95,10 @@ class TorchEngine:
         self._pool = pool
         self._kv = kv_cache
         self._decode_graph: DecodeGraph | None = None
-        self._decode_graph_key: tuple | None = None
+        self._decode_graph_key: int | None = None
         self._decode_graph_failed = False
+        self._loop: BatchLoop | None = None
+        self._next_seq = 0
 
     @property
     def model(self):
@@ -140,6 +148,76 @@ class TorchEngine:
         return cls(model, tokenizer, resolved, pool, kv_cache)
 
     async def generate(self, req: GenerateRequest) -> AsyncIterator[TokenEvent]:
+        inner = self._generate_single(req) if self._kv is None else self._generate_batched(req)
+        try:
+            async for event in inner:
+                yield event
+        finally:
+            # Closing this generator does not close `inner`; its finally releases blocks.
+            await inner.aclose()
+
+    async def close(self) -> None:
+        if self._loop is not None:
+            await self._loop.close()
+            self._loop = None
+
+    async def _generate_batched(self, req: GenerateRequest) -> AsyncIterator[TokenEvent]:
+        """Join the shared scheduler loop; this coroutine only waits on its own queue."""
+        started = time.perf_counter()
+        cap = clamp_max_tokens(req.max_tokens)
+        prompt_ids = self.encode(req.prompt)
+        if not prompt_ids:
+            yield TokenEvent(token="", finished=True, total_latency_ms=_elapsed_ms(started, time.perf_counter()))
+            return
+        self._next_seq += 1
+        # Callers may reuse request ids; the scheduler needs a unique key.
+        key = f"{req.request_id}#{self._next_seq}"
+        seq = SchedSeq(
+            request_id=key,
+            prompt_ids=list(prompt_ids),
+            max_new_tokens=cap,
+            temperature=req.temperature,
+            eos_id=self._tokenizer.eos_token_id,
+        )
+        loop = self._batch_loop()
+        queue = loop.submit(seq)
+        ttft_ms = 0.0
+        produced = 0
+        try:
+            while True:
+                item = await queue.get()
+                if isinstance(item, BaseException):
+                    raise item
+                produced += 1
+                now = time.perf_counter()
+                if produced == 1:
+                    ttft_ms = _elapsed_ms(started, now)
+                yield TokenEvent(
+                    token=self._tokenizer.decode([item.token_id], skip_special_tokens=True),
+                    finished=item.finished,
+                    prompt_tokens=len(prompt_ids),
+                    completion_tokens=produced,
+                    time_to_first_token_ms=ttft_ms if item.finished else 0.0,
+                    total_latency_ms=_elapsed_ms(started, now) if item.finished else 0.0,
+                )
+                if item.finished:
+                    return
+        finally:
+            loop.abort(key)
+
+    def _batch_loop(self) -> BatchLoop:
+        if self._loop is None:
+            scheduler = Scheduler(
+                self._pool,
+                page_size=self._kv.page_size,
+                max_seqs=_env_int("WORKER_MAX_SEQS", DEFAULT_MAX_SEQS),
+                token_budget=_env_int("WORKER_TOKEN_BUDGET", DEFAULT_TOKEN_BUDGET),
+            )
+            self._loop = BatchLoop(scheduler, ModelRunner(self._model, self._kv, self._device))
+        return self._loop
+
+    async def _generate_single(self, req: GenerateRequest) -> AsyncIterator[TokenEvent]:
+        """Models without a paged cache (test stubs) keep their own past_key_values."""
         started = time.perf_counter()
         cap = clamp_max_tokens(req.max_tokens)
         prompt_ids = self.encode(req.prompt)
@@ -267,15 +345,15 @@ class TorchEngine:
 
     def _graphed_decode(self, token_id: int, block_ids: list[int], seq_len: int):
         """Replay a captured flash decode step. None means the caller should run eager."""
-        key = (id(self._kv), tuple(block_ids))
+        pages = pages_needed(seq_len + 1, self._kv.page_size)
         try:
-            if self._decode_graph is None or self._decode_graph_key != key:
-                graph = DecodeGraph(self._model, self._kv, block_ids)
-                logits = graph.capture(token_id, seq_len)
+            if self._decode_graph is None or self._decode_graph_key != pages:
+                graph = DecodeGraph(self._model, self._kv, pages)
+                logits = graph.capture(token_id, seq_len, block_ids)
                 self._decode_graph = graph
-                self._decode_graph_key = key
+                self._decode_graph_key = pages
                 return logits
-            return self._decode_graph.replay(token_id, seq_len)
+            return self._decode_graph.replay(token_id, seq_len, block_ids)
         except Exception:
             _log.exception("flash decode graph failed; falling back to eager paged attention")
             self._decode_graph = None
@@ -357,3 +435,16 @@ def _pick_token(logits, temperature: float) -> int:
 
 def _elapsed_ms(started: float, now: float) -> float:
     return (now - started) * 1000.0
+
+
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if value < 1:
+        raise ValueError(f"{key} must be >= 1")
+    return value

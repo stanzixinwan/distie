@@ -29,4 +29,10 @@
 | 2026-10-09 | Qwen2 attention 按 block table 直接读写分页 KV（flash 布局 + SDPA）；服务路径去掉 gather/scatter。HF 参考模型与候选分开加载。|
 | 2026-10-09 | `DISTIE_ATTN=flash` 用 `flash_attn_with_kvcache` 按 block table 追加 KV（页大小须为 256 的倍数）；fp32 或未安装则记错误并退回 torch 索引。|
 | 2026-10-09 | 阶段 3 验收（3080）：fp32/fp16 与 HF 贪心逐 token 一致；flash decode 录成 CUDA graph 后 TPOT 12.2 ms，低于 HF `generate` 的 18.1 ms。|
+| 2026-10-09 | varlen 批前向：多条序列的 prefill/decode token 展平成一批，`slot_mapping` 写 KV，flash `flash_attn_varlen_func(block_table)` 或 torch 逐序列参考实现。|
+| 2026-10-09 | `Scheduler`（纯 Python）：FIFO 准入（座位数 + token 预算 + 块数），块按需增长，块不足时抢占最新序列并 recompute，取消在下一步释放块。|
+| 2026-10-09 | `TorchEngine` 改为单调度循环：`BatchLoop` + `ModelRunner`（单 GPU 线程），并发与逐条输出一致；修复 CUDA graph 捕获后未执行导致首 token 错误。|
+| 2026-10-09 | 压测客户端加 `--backend openai`（httpx 流式 `/v1/chat/completions`），可直接压 vLLM；Makefile 加 `BACKEND`。|
+| 2026-10-09 | 阶段 4 本地验收（3080）：ShareGPT 200 并发 64 达 978.9 output tok/s（基线 40.8）；`make bench` 默认并发改为 64；vLLM 对比待云上做。|
+| 2026-10-09 | Worker 优雅退出：SIGINT/SIGTERM 置 stop 事件 → `server.stop(grace)` → `engine.close()`；`Engine` 协议加 `close()`。|
 

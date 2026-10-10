@@ -1,8 +1,11 @@
-"""Serving benchmark: TTFT / TPOT / throughput over gRPC InferStream.
+"""Serving benchmark: TTFT / TPOT / throughput over a streaming API.
 
-Point --target at a Worker (default :50052) or the Gateway (:50051). The
-Gateway's leaky bucket defaults to 20 req/s; start it with
-DISTIE_RATE_LIMIT_RPS=0 unless rate limiting is what you are measuring.
+--backend grpc (default): point --target at a Worker (:50052) or the
+Gateway (:50051). The Gateway's leaky bucket defaults to 20 req/s; start it
+with DISTIE_RATE_LIMIT_RPS=0 unless rate limiting is what you are measuring.
+
+--backend openai: point --target at an OpenAI-compatible server, e.g.
+`vllm serve ... --served-model-name distie` on http://localhost:8000.
 
 Usage:
   python benchmarks/load/bench_serving.py --workload sharegpt \
@@ -30,7 +33,7 @@ for _p in (_HERE, _WORKER_SRC):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from client import run_benchmark  # noqa: E402
+from client import BACKENDS, run_benchmark  # noqa: E402
 from stats import summarize  # noqa: E402
 from workload import BenchRequest, load_sharegpt, synthetic  # noqa: E402
 
@@ -74,6 +77,7 @@ def format_summary(summary: dict) -> str:
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--backend", choices=BACKENDS, default="grpc")
     parser.add_argument("--target", default="localhost:50052")
     parser.add_argument("--workload", choices=["sharegpt", "synthetic"], default="sharegpt")
     parser.add_argument("--dataset", type=Path, help="ShareGPT JSON (required for --workload sharegpt)")
@@ -106,7 +110,10 @@ def main(argv: list[str] | None = None) -> int:
     except (ImportError, OSError, ValueError) as exc:
         _log.error("workload setup failed: %s", exc)
         return 2
-    _log.info("workload=%s requests=%s rate=%s target=%s", args.workload, len(requests), args.rate, args.target)
+    _log.info(
+        "workload=%s requests=%s rate=%s backend=%s target=%s",
+        args.workload, len(requests), args.rate, args.backend, args.target,
+    )
 
     try:
         records, duration = asyncio.run(
@@ -119,8 +126,12 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_s=args.timeout,
                 warmup=args.warmup,
                 seed=args.seed,
+                backend=args.backend,
             )
         )
+    except ImportError as exc:
+        _log.error("backend %s unavailable: %s", args.backend, exc)
+        return 2
     except (RuntimeError, ValueError) as exc:
         _log.error("benchmark aborted: %s", exc)
         return 2
@@ -131,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.out:
         report = {
             "config": {
+                "backend": args.backend,
                 "target": args.target,
                 "workload": args.workload,
                 "dataset": str(args.dataset) if args.dataset else None,
