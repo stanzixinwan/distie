@@ -180,12 +180,13 @@ flowchart LR
 
 
 
-### 阶段 4.5：批 decode 的 CUDA graph（实现 ✅，GPU 实测待做）
+### 阶段 4.5：批 decode 的 CUDA graph（3080 ✅，A100 待测）
 
 - 纯 decode 步（每条序列只解码 1 个 token）按批大小分桶（1、2、4、8、16、24、32…），每个桶录一个 CUDA graph，首次用到时录制。
 - block table 固定宽度，kernel 按每行的 `seqlen` 读到为止；空位行写入 KV slab 里多留的一页，这一页 BlockPool 永远不会分配出去。
 - 每步只把 token、位置、长度、block table 从 pinned 内存异步拷到 graph 的固定缓冲区，然后 replay。含 prefill 的步继续走 varlen eager 路径；graph 出错时退回 eager。`WORKER_DECODE_GRAPHS=0` 可关闭，便于 A/B 对比。
 - **验收**：graph replay 与 varlen eager 逐 token 一致（`worker/tests/test_batch_decode.py`，CUDA 用例）；A100 上并发 64 的 TPOT 从 19.8 ms 降到 10 ms 以内，吞吐达到 vLLM 同配置的 60% 以上。
+- **3080 实测**（2026-10-13，ShareGPT 200 条、并发 64）：GPU 单测 5/5 通过；graph 开/关对比，吞吐 956.5 → 1271.2 tok/s（+33%），TPOT p50 29.75 → 22.68 ms。离 3080 读一遍权重约 7 ms 的下限还有距离，下一步用 `WORKER_STEP_STATS` 拆分每步耗时，定位剩余开销。见 `benchmarks/results/stage4.5-3080.md`。
 
 
 
@@ -390,12 +391,13 @@ Local numbers are for iteration and debugging. Numbers reported externally come 
 - **Local result** (RTX 3080 Laptop, WSL2, Qwen2.5-1.5B fp16, flash, 2026-10-09): concurrent generation matches one-at-a-time generation token for token. ShareGPT, 200 requests, concurrency 64: 978.9 output tok/s, 24× the stage-2 baseline of 40.8 tok/s. See `benchmarks/results/stage4-3080.md`.
 - **vLLM comparison** (A100-SXM4-80GB, vLLM 0.11, 2026-10-13): with the same configuration, DistIE reaches 83% of vLLM's throughput at concurrency 1 and 31% at concurrency 64. The gap is batched decode: each step costs about 14 ms more, and the GPU is busy only about 46% of the time. That is CPU overhead: batched decode has no CUDA graph, and each step builds its metadata in Python. See `benchmarks/results/stage4-a100-vs-vllm.md`.
 
-### Stage 4.5: CUDA graphs for batched decode (implemented ✅, GPU measurement open)
+### Stage 4.5: CUDA graphs for batched decode (3080 ✅, A100 open)
 
 - A pure-decode step (every sequence decodes one token) is rounded up to a batch-size bucket (1, 2, 4, 8, 16, 24, 32, ...). Each bucket gets its own CUDA graph, captured the first time it is used.
 - The block table has a fixed width, and the kernel reads each row only up to its `seqlen`. Padding rows write into one extra page at the end of the KV slab, which the BlockPool never hands out.
 - Each step copies only the tokens, positions, lengths and block table from pinned memory into the graph's fixed buffers, then replays. Steps with any prefill stay on the eager varlen path, and a graph error falls back to eager. `WORKER_DECODE_GRAPHS=0` turns graphs off for A/B runs.
 - **Acceptance**: graph replay matches the eager varlen path token for token (`worker/tests/test_batch_decode.py`, CUDA case). On the A100, concurrency-64 TPOT drops from 19.8 ms to under 10 ms, and throughput reaches at least 60% of vLLM with the same configuration.
+- **3080 result** (2026-10-13, ShareGPT 200 requests, concurrency 64): the GPU tests pass 5/5. With graphs on versus off, throughput goes from 956.5 to 1271.2 tok/s (+33%) and TPOT p50 from 29.75 to 22.68 ms. That is still well above the roughly 7 ms the 3080 needs to read the weights once per step. The next step is to split step time with `WORKER_STEP_STATS` and find the remaining overhead. See `benchmarks/results/stage4.5-3080.md`.
 
 ### Stage 5: C++ KV block manager
 
