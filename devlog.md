@@ -38,3 +38,4 @@
 | 2026-10-13 | 阶段 4 云上对比（A100 80GB，vLLM 0.11）：同配置下 DistIE 并发 1 达 vLLM 的 83%、并发 64 达 31%；批 decode 每步多约 14 ms 且 GPU 利用率仅约 46%，瓶颈是 CPU（批 decode 无 CUDA graph）。|
 | 2026-10-13 | 新增英文 `README.md`：项目简介、架构图、阶段结果与 vLLM 对比、差距分析、Quickstart、配置表与 Roadmap。|
 | 2026-10-13 | README 精简重排：架构图简化，结果改为一张 vLLM 对比图（亮/暗两版 SVG），完整表格与配置收进折叠块。|
+| 2026-10-13 | 批 decode CUDA graph：`forward_decode` 支持 [B,1]；`BatchDecodeGraphs` 按批大小分桶录制，block table 固定宽度，空位行写入 slab 末尾的备用页；`ModelRunner` 纯 decode 步走 graph，出错退回 eager；新增 `WORKER_DECODE_GRAPHS` 开关。GPU 实测待做。|
