@@ -47,4 +47,4 @@ ShareGPT 200 条，`--rate inf`，并发 64，两次都是 200/200 成功。同�
 
 下一步：`gpu` 已拆成 `kernel`（CUDA event 量出的 forward 本身）和 `host`（GPU 线程里 forward 之外的时间：组装输入、采样、同步）。重跑一次即可判断这 18 ms 是 kernel 本身慢（需要算子融合 / 调 split 参数），还是 host 侧开销。
 
-原始报告在 WSL 的 `/tmp/graphs-off.json`、`/tmp/graphs-on.json`，尚未放进仓库。
+原始报告：[`stage4.5-3080/graphs-off.json`](stage4.5-3080/graphs-off.json)、[`stage4.5-3080/graphs-on.json`](stage4.5-3080/graphs-on.json)。A/B 复现脚本：`scripts/ab_decode_graphs.sh`。
