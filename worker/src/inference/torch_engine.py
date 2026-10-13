@@ -28,6 +28,7 @@ from inference.engine import (
 from inference.batch_loop import BatchLoop
 from inference.kv_cache import KvShape, PagedKvCache, pages_needed
 from inference.model_runner import ModelRunner
+from inference.qwen2.batch_decode import BatchDecodeGraphs
 from inference.qwen2.decode_graph import DecodeGraph
 from inference.qwen2.paged_attn import flash_enabled, serving_page_size
 from inference.qwen2 import Qwen2CausalLM
@@ -207,14 +208,33 @@ class TorchEngine:
 
     def _batch_loop(self) -> BatchLoop:
         if self._loop is None:
+            max_seqs = _env_int("WORKER_MAX_SEQS", DEFAULT_MAX_SEQS)
             scheduler = Scheduler(
                 self._pool,
                 page_size=self._kv.page_size,
-                max_seqs=_env_int("WORKER_MAX_SEQS", DEFAULT_MAX_SEQS),
+                max_seqs=max_seqs,
                 token_budget=_env_int("WORKER_TOKEN_BUDGET", DEFAULT_TOKEN_BUDGET),
             )
-            self._loop = BatchLoop(scheduler, ModelRunner(self._model, self._kv, self._device))
+            runner = ModelRunner(self._model, self._kv, self._device, self._decode_graphs(max_seqs))
+            self._loop = BatchLoop(scheduler, runner)
         return self._loop
+
+    def _decode_graphs(self, max_seqs: int) -> BatchDecodeGraphs | None:
+        """Graphs need CUDA, the flash kernel, and a KV page the pool never hands out."""
+        if not _env_bool("WORKER_DECODE_GRAPHS", True):
+            _log.info("batch decode graphs disabled by WORKER_DECODE_GRAPHS")
+            return None
+        if self._device != "cuda" or not flash_enabled(self._kv.dtype):
+            return None
+        pool_blocks = int(getattr(self._pool, "num_blocks", self._kv.num_blocks))
+        if self._kv.num_blocks <= pool_blocks:
+            _log.warning("batch decode graphs off: KV slab has no spare page for padding rows")
+            return None
+        try:
+            return BatchDecodeGraphs(self._model, self._kv, pad_block=pool_blocks, max_batch=max_seqs)
+        except Exception:
+            _log.exception("batch decode graphs unavailable; decode steps stay eager")
+            return None
 
     async def _generate_single(self, req: GenerateRequest) -> AsyncIterator[TokenEvent]:
         """Models without a paged cache (test stubs) keep their own past_key_values."""
@@ -415,9 +435,10 @@ def _maybe_paged_cache(model, pool: BlockAllocator | None, device: str) -> Paged
     import torch
 
     dtype = next(model.parameters()).dtype
+    # One page past the pool's range: padding rows of a decode graph write there.
     return PagedKvCache(
         shape,
-        num_blocks=int(num_blocks),
+        num_blocks=int(num_blocks) + 1,
         device=device,
         dtype=dtype,
         page_size=serving_page_size(dtype),
@@ -448,3 +469,10 @@ def _env_int(key: str, default: int) -> int:
     if value < 1:
         raise ValueError(f"{key} must be >= 1")
     return value
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}

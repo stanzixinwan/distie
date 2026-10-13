@@ -1,7 +1,9 @@
 """GPU side of continuous batching: one StepPlan in, one token per sequence out.
 
 Runs only on the engine's single GPU thread. The scheduler decides who runs;
-this module turns that plan into one flattened forward and samples.
+this module turns that plan into one forward and samples. A step where every
+row decodes one token replays a CUDA graph (BatchDecodeGraphs); a step with
+any prefill runs the flattened varlen forward eagerly.
 """
 
 from __future__ import annotations
@@ -10,29 +12,39 @@ import logging
 
 import torch
 
-from inference.kv_cache import PagedKvCache, pages_needed
-from inference.qwen2.decode_graph import DecodeGraph
-from inference.qwen2.paged_attn import BatchSeq, build_batch, flash_enabled
+from inference.kv_cache import PagedKvCache
+from inference.qwen2.batch_decode import BatchDecodeGraphs, DecodeRow
+from inference.qwen2.paged_attn import BatchSeq, build_batch
 from inference.scheduler import StepPlan
 
 _log = logging.getLogger(__name__)
 
 
 class ModelRunner:
-    def __init__(self, model, cache: PagedKvCache, device: str) -> None:
+    def __init__(
+        self,
+        model,
+        cache: PagedKvCache,
+        device: str,
+        decode: BatchDecodeGraphs | None = None,
+    ) -> None:
+        """decode=None keeps every step on the eager varlen path."""
         if not hasattr(model, "forward_batch"):
             raise TypeError("ModelRunner needs a model with forward_batch (Qwen2CausalLM)")
         self._model = model
         self._cache = cache
         self._device = device
-        self._graphs: dict[int, DecodeGraph] = {}
-        self._graphs_failed = False
+        self._decode = decode
+
+    @property
+    def graphs_active(self) -> bool:
+        return self._decode is not None
 
     def step(self, plan: StepPlan) -> list[int]:
         if not plan.items:
             raise ValueError("empty step plan")
         with torch.inference_mode():
-            logits = self._single_decode_graphed(plan)
+            logits = self._decode_step(plan)
             if logits is None:
                 logits = self._forward(plan)
             return _sample(logits, [item.seq.temperature for item in plan.items])
@@ -44,28 +56,19 @@ class ModelRunner:
         ids = torch.tensor(flat, dtype=torch.long, device=self._device)
         return self._model.forward_batch(ids, self._cache, meta)
 
-    def _single_decode_graphed(self, plan: StepPlan) -> torch.Tensor | None:
-        """A lone decode row replays a CUDA graph; batched rows run eager."""
-        if len(plan.items) != 1 or self._graphs_failed or self._device != "cuda":
+    def _decode_step(self, plan: StepPlan) -> torch.Tensor | None:
+        """Pure-decode steps go through the bucketed graphs. None means run eager."""
+        if self._decode is None or len(plan.items) > self._decode.max_batch:
             return None
-        item = plan.items[0]
-        if len(item.token_ids) != 1 or not flash_enabled(self._cache.dtype):
+        if any(len(item.token_ids) != 1 for item in plan.items):
             return None
-        pages = pages_needed(item.past_len + 1, self._cache.page_size)
-        block_ids = item.seq.block_ids
+        rows = [DecodeRow(item.token_ids[0], item.past_len, item.seq.block_ids) for item in plan.items]
         try:
-            graph = self._graphs.get(pages)
-            if graph is None:
-                graph = DecodeGraph(self._model, self._cache, pages)
-                logits = graph.capture(item.token_ids[0], item.past_len, block_ids)
-                self._graphs[pages] = graph
-            else:
-                logits = graph.replay(item.token_ids[0], item.past_len, block_ids)
-            return logits[:, -1, :]
+            return self._decode.run(rows)
         except Exception:
-            _log.exception("flash decode graph failed; batched steps stay eager")
-            self._graphs.clear()
-            self._graphs_failed = True
+            # The eager forward rewrites the same K/V slots, so retrying this step is safe.
+            _log.exception("batch decode graph failed; all steps stay eager from now on")
+            self._decode = None
             return None
 
 
