@@ -42,3 +42,4 @@
 | 2026-10-13 | `test_batch_decode` 的长 prompt 按词表取模：页大小只决定长度，token id 不再越过 `vocab_size`，避免 CUDA embedding gather 越界。|
 | 2026-10-13 | 阶段 4.5 本地验收（3080）：GPU 单测 5/5；graph 开/关对比，吞吐 956.5 → 1271.2 tok/s（+33%），TPOT p50 29.75 → 22.68 ms。|
 | 2026-10-13 | 新增 `WORKER_STEP_STATS=N`：每 N 步按 decode / prefill 分组记录 sched、gpu、wait、emit 的平均耗时和占比，用来定位剩余开销。|
+| 2026-10-13 | 3080 每步拆分：decode 步 GPU 线程 17.8–18.4 ms 且与批大小无关，wait 约 3 ms（11–14%），调度 + 发送约 2%；prefill 步约 15% 步数、四分之一墙钟。step stats 再把 gpu 拆成 kernel（CUDA event）和 host。|

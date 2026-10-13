@@ -26,4 +26,25 @@ ShareGPT 200 条，`--rate inf`，并发 64，两次都是 200/200 成功。同�
   2. forward 之外的 CPU 工作：调度、采样同步、逐 token detokenize 和 gRPC 推送，后者在 asyncio 线程里与 GPU 线程争 GIL。
 - 下一步用 `WORKER_STEP_STATS=200` 重跑同一负载，按 decode / prefill 分开看 sched、gpu、wait、emit 各占多少，再决定是做 chunked prefill，还是把采样和 detokenize 移出热路径。
 
+## 每步耗时拆分（`WORKER_STEP_STATS=200`）
+
+同一负载，graph 开。稳态窗口（32 座位满载）每 200 步的典型值：
+
+| 步类型 | 占步数 | 每步 rows / 新 token | sched | gpu | wait | emit | 占墙钟 |
+|---|---:|---|---:|---:|---:|---:|---:|
+| decode（graph） | ~85% | 32 / 32 | 0.2 ms | **17.8–18.4 ms** | 3.0–3.5 ms | 0.2 ms | 67–76% |
+| prefill（eager，混合批） | ~15% | 32 / 137–227 | 0.2 ms | 38–45 ms | 3.2–3.8 ms | 0.2 ms | 24–33% |
+
+全窗口合计：gpu 84–87%，wait 11–14%，sched + emit 约 2%。
+
+读法：
+
+- **调度器不是瓶颈。** 纯 Python 的 `Scheduler` 每步 0.2 ms，约占 1%。这也意味着阶段 5 把调度挪到 C++，对吞吐帮助有限，价值在前缀缓存等功能本身。
+- **wait 占 11–14%。** GPU 线程算完后，事件循环平均要 3 ms 才回来处理，这段时间被 32 路 detokenize 和 gRPC 推送占着（同时争 GIL）。
+- **大头在 GPU 线程，而且与批大小无关。** decode 步 rows=32 时 17.8 ms，rows=21 时 17.8 ms，rows=6 时 20.0 ms，rows=1 时 15.1 ms。每步约 15–18 ms 的固定成本，是 3080 读一遍权重下限（约 8–9 ms）的 2 倍左右。
+- **batch=1 比阶段 3 慢约 3 ms。** 阶段 3 单条 graph 的 TPOT 是 12.2 ms，这里 rows=1 的 gpu 是 15.1 ms。一个嫌疑：新 graph 的 block table 固定 513 列，flash-attn 按「列数 × 页大小」估计 KV 长度来决定 split-KV 份数，小批时可能切得过细。待验证。
+- prefill 步每步 38–45 ms，占约 15% 的步数和四分之一以上的墙钟。它不影响总工作量，但会让同批 decode 等它，拉高 TPOT。
+
+下一步：`gpu` 已拆成 `kernel`（CUDA event 量出的 forward 本身）和 `host`（GPU 线程里 forward 之外的时间：组装输入、采样、同步）。重跑一次即可判断这 18 ms 是 kernel 本身慢（需要算子融合 / 调 split 参数），还是 host 侧开销。
+
 原始报告在 WSL 的 `/tmp/graphs-off.json`、`/tmp/graphs-on.json`，尚未放进仓库。
