@@ -46,11 +46,11 @@ class CountingDecode(BatchDecodeGraphs):
         self.calls = 0
         self.fail = fail
 
-    def run(self, rows):
+    def run(self, rows, timer=None):
         self.calls += 1
         if self.fail:
             raise RuntimeError("capture failed")
-        return super().run(rows)
+        return super().run(rows, timer)
 
 
 def _generate(runner: ModelRunner, steps: int) -> list[list[int]]:
@@ -88,6 +88,20 @@ class ModelRunnerRoutingTest(unittest.TestCase):
         self.assertEqual(_generate(runner, steps=4), eager)
         self.assertEqual(decode.calls, 1)
         self.assertFalse(runner.graphs_active)
+
+    def test_kernel_time_reported_on_both_paths(self) -> None:
+        model, config = _model()
+        cache = _cache(config)
+        decode = CountingDecode(model, cache, pad_block=16, max_batch=4, use_graphs=False)
+        runner = ModelRunner(model, cache, "cpu", decode)
+        self.assertIsNone(runner.last_kernel_ms)
+        runner.measure_kernel = True
+        seq = Sequence(request_id="r", prompt_ids=[3, 5, 7], max_new_tokens=2, block_ids=[0, 1])
+        tok = runner.step(StepPlan((ScheduledSeq(seq, [3, 5, 7], 0),)))[0]
+        self.assertGreater(runner.last_kernel_ms, 0.0)
+        runner.step(StepPlan((ScheduledSeq(seq, [tok], 3),)))
+        self.assertEqual(decode.calls, 1)
+        self.assertGreater(runner.last_kernel_ms, 0.0)
 
     def test_batches_wider_than_the_graphs_stay_varlen(self) -> None:
         model, config = _model()

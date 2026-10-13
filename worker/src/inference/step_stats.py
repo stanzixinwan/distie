@@ -10,6 +10,10 @@ Each step is split into four parts, measured by BatchLoop:
          other coroutines (detokenize, gRPC writes) holding the loop or the GIL
   emit   Scheduler.complete() and routing tokens to request queues
 
+gpu is further split when the runner reports it: kernel is the forward's
+GPU time between two CUDA events, and host = gpu - kernel is what the GPU
+thread spends outside it (staging inputs, launching, sampling, syncing).
+
 Steps are grouped by kind: "decode" (every row decodes one token, the
 CUDA-graph path) and "prefill" (at least one row prefills, the eager path).
 """
@@ -30,13 +34,20 @@ class _Group:
     rows: int = 0
     tokens: int = 0
     ms: dict[str, float] = field(default_factory=lambda: dict.fromkeys(PARTS, 0.0))
+    kernel_ms: float = 0.0
+    kernel_steps: int = 0
+    kernel_gpu_ms: float = 0.0  # gpu time of the steps that reported a kernel time
 
-    def add(self, rows: int, tokens: int, parts: dict[str, float]) -> None:
+    def add(self, rows: int, tokens: int, parts: dict[str, float], kernel: float | None) -> None:
         self.steps += 1
         self.rows += rows
         self.tokens += tokens
         for name in PARTS:
             self.ms[name] += parts[name]
+        if kernel is not None:
+            self.kernel_ms += kernel
+            self.kernel_steps += 1
+            self.kernel_gpu_ms += parts["gpu"]
 
     def total_ms(self) -> float:
         return sum(self.ms.values())
@@ -50,11 +61,11 @@ class StepStats:
         self._groups: dict[str, _Group] = {}
         self._steps = 0
 
-    def record(self, kind: str, rows: int, tokens: int, **parts_ms: float) -> None:
+    def record(self, kind: str, rows: int, tokens: int, kernel: float | None = None, **parts_ms: float) -> None:
         missing = set(PARTS) - set(parts_ms)
         if missing:
             raise ValueError(f"missing step parts: {sorted(missing)}")
-        self._groups.setdefault(kind, _Group()).add(rows, tokens, parts_ms)
+        self._groups.setdefault(kind, _Group()).add(rows, tokens, parts_ms, kernel)
         self._steps += 1
         if self._steps >= self.every:
             self.flush()
@@ -76,6 +87,10 @@ class StepStats:
             g = self._groups[kind]
             n = g.steps
             avg = " ".join(f"{name}={g.ms[name] / n:.2f}" for name in PARTS)
+            if g.kernel_steps:
+                k = g.kernel_ms / g.kernel_steps
+                host = (g.kernel_gpu_ms - g.kernel_ms) / g.kernel_steps
+                avg += f" (kernel={k:.2f} host={host:.2f})"
             pieces.append(
                 f"{kind} n={n} rows={g.rows / n:.1f} tok={g.tokens / n:.0f} "
                 f"ms/step[{avg}] share={100 * g.total_ms() / wall:.0f}%"

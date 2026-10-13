@@ -32,6 +32,15 @@ class StepStatsTest(unittest.TestCase):
             self.assertEqual(stats.flush(), line)
         self.assertIsNone(stats.flush())
 
+    def test_kernel_split_of_gpu_time(self) -> None:
+        stats = StepStats(every=100)
+        stats.record("decode", rows=32, tokens=32, kernel=9.0, sched=0.2, gpu=12.0, wait=1.0, emit=0.2)
+        stats.record("decode", rows=32, tokens=32, kernel=11.0, sched=0.2, gpu=14.0, wait=1.0, emit=0.2)
+        stats.record("prefill", rows=8, tokens=400, sched=0.2, gpu=40.0, wait=1.0, emit=0.2)
+        line = stats.format()
+        self.assertIn("gpu=13.00 wait=1.00 emit=0.20 (kernel=10.00 host=3.00)]", line)
+        self.assertNotIn("kernel", line.split("prefill")[1])
+
     def test_logs_every_n_steps(self) -> None:
         stats = StepStats(every=2)
         with self.assertLogs("inference.step_stats", "INFO") as logs:
@@ -62,9 +71,9 @@ class RecordingStats(StepStats):
         super().__init__(every=1000)
         self.entries: list[tuple[str, int, int, dict]] = []
 
-    def record(self, kind: str, rows: int, tokens: int, **parts: float) -> None:
+    def record(self, kind: str, rows: int, tokens: int, kernel: float | None = None, **parts: float) -> None:
         self.entries.append((kind, rows, tokens, parts))
-        super().record(kind, rows, tokens, **parts)
+        super().record(kind, rows, tokens, kernel, **parts)
 
 
 class BatchLoopStatsTest(unittest.TestCase):

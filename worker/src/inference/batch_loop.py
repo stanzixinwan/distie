@@ -38,6 +38,8 @@ class BatchLoop:
         self._scheduler = scheduler
         self._runner = runner
         self._stats = stats
+        if stats is not None and hasattr(runner, "measure_kernel"):
+            runner.measure_kernel = True
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="distie-gpu")
         self._queues: dict[str, asyncio.Queue] = {}
         self._wake = asyncio.Event()
@@ -90,9 +92,9 @@ class BatchLoop:
             try:
                 if self._stats is None:
                     next_ids = await loop.run_in_executor(self._executor, self._runner.step, plan)
-                    gpu_s = 0.0
+                    gpu_s, kernel_ms = 0.0, None
                 else:
-                    next_ids, gpu_s = await loop.run_in_executor(self._executor, self._timed_step, plan)
+                    next_ids, gpu_s, kernel_ms = await loop.run_in_executor(self._executor, self._timed_step, plan)
             except Exception as exc:
                 _log.exception("forward step failed seqs=%s tokens=%s", len(plan.items), plan.num_tokens)
                 self._fail(plan, exc)
@@ -111,13 +113,15 @@ class BatchLoop:
                     gpu=gpu_s * 1e3,
                     wait=max(0.0, (t_emit - t_run) - gpu_s) * 1e3,
                     emit=(clock() - t_emit) * 1e3,
+                    kernel=kernel_ms,
                 )
 
-    def _timed_step(self, plan: StepPlan) -> tuple[list[int], float]:
+    def _timed_step(self, plan: StepPlan) -> tuple[list[int], float, float | None]:
         """Runs on the GPU thread, so the time excludes waiting for the event loop."""
         start = time.perf_counter()
         next_ids = self._runner.step(plan)
-        return next_ids, time.perf_counter() - start
+        elapsed = time.perf_counter() - start
+        return next_ids, elapsed, getattr(self._runner, "last_kernel_ms", None)
 
     def _deliver(self, emission: Emission) -> None:
         rid = emission.seq.request_id

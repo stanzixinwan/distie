@@ -128,14 +128,27 @@ class BatchDecodeGraphs:
             raise ValueError(f"decode batch of {rows} rows outside 1..{self.max_batch}")
         return self._sizes[bisect.bisect_left(self._sizes, rows)]
 
-    def run(self, rows: Sequence[DecodeRow]) -> torch.Tensor:
-        """Logits [len(rows), vocab] at each row's new token. K/V for that token is written."""
+    def run(self, rows: Sequence[DecodeRow], timer=None) -> torch.Tensor:
+        """Logits [len(rows), vocab] at each row's new token. K/V for that token is written.
+
+        timer, if given, has start()/stop() called around the launch only,
+        after host-side staging, so it measures GPU execution of the step.
+        """
         size = self.bucket_for(len(rows))
         bucket = self._buckets.get(size)
         if bucket is None:
             bucket = _Bucket(size, self._width, self._device)
             self._buckets[size] = bucket
         self._stage(rows, bucket)
+        if timer is not None:
+            timer.start()
+        try:
+            return self._launch(bucket)[: len(rows), -1, :]
+        finally:
+            if timer is not None:
+                timer.stop()
+
+    def _launch(self, bucket: _Bucket) -> torch.Tensor:
         if not self._use_graphs:
             logits = self._forward(bucket)
         elif bucket.graph is None:
@@ -143,7 +156,7 @@ class BatchDecodeGraphs:
         else:
             bucket.graph.replay()
             logits = bucket.logits
-        return logits[: len(rows), -1, :]
+        return logits
 
     def _stage(self, rows: Sequence[DecodeRow], bucket: _Bucket) -> None:
         if self._copied is not None:
