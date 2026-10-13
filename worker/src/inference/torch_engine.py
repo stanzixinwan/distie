@@ -33,6 +33,7 @@ from inference.qwen2.decode_graph import DecodeGraph
 from inference.qwen2.paged_attn import flash_enabled, serving_page_size
 from inference.qwen2 import Qwen2CausalLM
 from inference.scheduler import DEFAULT_MAX_SEQS, DEFAULT_TOKEN_BUDGET, Scheduler, Sequence as SchedSeq
+from inference.step_stats import StepStats
 
 _log = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ class TorchEngine:
                 token_budget=_env_int("WORKER_TOKEN_BUDGET", DEFAULT_TOKEN_BUDGET),
             )
             runner = ModelRunner(self._model, self._kv, self._device, self._decode_graphs(max_seqs))
-            self._loop = BatchLoop(scheduler, runner)
+            self._loop = BatchLoop(scheduler, runner, _step_stats())
         return self._loop
 
     def _decode_graphs(self, max_seqs: int) -> BatchDecodeGraphs | None:
@@ -476,3 +477,17 @@ def _env_bool(key: str, default: bool) -> bool:
     if raw is None or raw.strip() == "":
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _step_stats() -> StepStats | None:
+    """WORKER_STEP_STATS=N logs a per-step time breakdown every N steps; unset or 0 is off."""
+    raw = os.getenv("WORKER_STEP_STATS", "").strip()
+    if raw in {"", "0"}:
+        return None
+    try:
+        every = int(raw)
+    except ValueError as exc:
+        raise ValueError("WORKER_STEP_STATS must be an integer") from exc
+    if every < 0:
+        raise ValueError("WORKER_STEP_STATS must be >= 0")
+    return StepStats(every)

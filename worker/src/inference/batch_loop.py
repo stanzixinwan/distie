@@ -6,16 +6,21 @@ runs it on a one-thread executor (so no two forwards ever touch the KV slab
 together, and the event loop never blocks), then routes each sampled token
 to its request's queue. Block allocation happens only in this task, so the
 pool needs no lock.
+
+With a StepStats attached, every step is timed in four parts (schedule,
+GPU thread, event-loop resume, emit) and summarized every N steps.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Protocol
 
 from inference.scheduler import Emission, Scheduler, Sequence, StepPlan
+from inference.step_stats import StepStats
 
 _log = logging.getLogger(__name__)
 
@@ -29,9 +34,10 @@ class StepFailed(RuntimeError):
 
 
 class BatchLoop:
-    def __init__(self, scheduler: Scheduler, runner: StepRunner) -> None:
+    def __init__(self, scheduler: Scheduler, runner: StepRunner, stats: StepStats | None = None) -> None:
         self._scheduler = scheduler
         self._runner = runner
+        self._stats = stats
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="distie-gpu")
         self._queues: dict[str, asyncio.Queue] = {}
         self._wake = asyncio.Event()
@@ -62,6 +68,8 @@ class BatchLoop:
                 pass
             self._task = None
         self._executor.shutdown(wait=True)
+        if self._stats is not None:
+            self._stats.flush()
 
     def _ensure_task(self) -> None:
         if self._task is None or self._task.done():
@@ -70,21 +78,46 @@ class BatchLoop:
 
     async def _run(self) -> None:
         loop = asyncio.get_running_loop()
+        clock = time.perf_counter
         while True:
+            t_sched = clock()
             plan = self._scheduler.schedule()
             if not plan.items:
                 self._wake.clear()
                 await self._wake.wait()
                 continue
+            t_run = clock()
             try:
-                next_ids = await loop.run_in_executor(self._executor, self._runner.step, plan)
+                if self._stats is None:
+                    next_ids = await loop.run_in_executor(self._executor, self._runner.step, plan)
+                    gpu_s = 0.0
+                else:
+                    next_ids, gpu_s = await loop.run_in_executor(self._executor, self._timed_step, plan)
             except Exception as exc:
                 _log.exception("forward step failed seqs=%s tokens=%s", len(plan.items), plan.num_tokens)
                 self._fail(plan, exc)
                 continue
+            t_emit = clock()
             self.steps += 1
             for emission in self._scheduler.complete(plan, next_ids):
                 self._deliver(emission)
+            if self._stats is not None:
+                decode = all(len(item.token_ids) == 1 for item in plan.items)
+                self._stats.record(
+                    "decode" if decode else "prefill",
+                    rows=len(plan.items),
+                    tokens=plan.num_tokens,
+                    sched=(t_run - t_sched) * 1e3,
+                    gpu=gpu_s * 1e3,
+                    wait=max(0.0, (t_emit - t_run) - gpu_s) * 1e3,
+                    emit=(clock() - t_emit) * 1e3,
+                )
+
+    def _timed_step(self, plan: StepPlan) -> tuple[list[int], float]:
+        """Runs on the GPU thread, so the time excludes waiting for the event loop."""
+        start = time.perf_counter()
+        next_ids = self._runner.step(plan)
+        return next_ids, time.perf_counter() - start
 
     def _deliver(self, emission: Emission) -> None:
         rid = emission.seq.request_id
