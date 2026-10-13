@@ -15,7 +15,7 @@ import torch
 from torch import nn
 
 from inference.kv_cache import PagedKvCache
-from inference.qwen2.paged_attn import BatchMeta, attend, attend_batch, flash_decode
+from inference.qwen2.paged_attn import BatchMeta, attend, attend_batch, decode_attend
 
 _log = logging.getLogger(__name__)
 
@@ -185,7 +185,9 @@ class Attention(nn.Module):
         seqlen: torch.Tensor,
     ) -> torch.Tensor:
         query, key, value = self._project(hidden, cos, sin)
-        return self._merge(flash_decode(query, key, value, cache, layer, block_table, seqlen))
+        return self._merge(
+            decode_attend(query, key, value, cache, layer, block_table, seqlen, self.num_kv_groups)
+        )
 
     def forward_batch(
         self,
@@ -344,13 +346,20 @@ class Qwen2CausalLM(nn.Module):
         position: torch.Tensor,
         seqlen: torch.Tensor,
     ) -> torch.Tensor:
-        """One new token. position is [1, 1] long; seqlen is [1] int32, both caller-owned.
+        """One new token for each of B rows. Logits are [B, 1, vocab].
 
-        A CUDA graph replays this with those tensors updated in place, so the
-        body must not rebuild them from Python integers.
+        input_ids and position are [B, 1] long, seqlen is [B] int32 (tokens
+        already stored), block_table is [B, W] int32. All are caller-owned:
+        a CUDA graph replays this with them updated in place, so the body
+        must not rebuild them from Python integers.
         """
-        if input_ids.shape != (1, 1):
-            raise ValueError("forward_decode expects input_ids [1, 1]")
+        if input_ids.ndim != 2 or input_ids.shape[1] != 1:
+            raise ValueError("forward_decode expects input_ids [B, 1]")
+        batch = int(input_ids.shape[0])
+        if tuple(position.shape) != (batch, 1) or tuple(seqlen.shape) != (batch,):
+            raise ValueError("forward_decode expects position [B, 1] and seqlen [B]")
+        if block_table.ndim != 2 or int(block_table.shape[0]) != batch:
+            raise ValueError("forward_decode expects block_table [B, W]")
         hidden = self.embed_tokens(input_ids)
         cos, sin = self.rotary_emb(hidden, position)
         for index, layer in enumerate(self.layers):

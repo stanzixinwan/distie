@@ -8,6 +8,8 @@ fp32 stays on the torch path: the kernel is fp16/bf16 only.
 attend() serves one sequence. attend_batch() serves a flattened varlen
 batch: sequences packed back to back, cu_seqlens marking the boundaries,
 so prefill and decode rows share one forward without padding.
+decode_attend() serves a pure-decode batch from fixed-shape device tensors,
+which is what a CUDA graph needs.
 """
 
 from __future__ import annotations
@@ -205,6 +207,63 @@ def _flash_attend(
     return out.transpose(1, 2).contiguous()
 
 
+def decode_attend(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    cache: PagedKvCache,
+    layer: int,
+    block_table: torch.Tensor,
+    seqlen: torch.Tensor,
+    n_rep: int,
+) -> torch.Tensor:
+    """One new token per row. query [B, heads, 1, dim], key/value [B, kv_heads, 1, dim].
+
+    block_table [B, W] int32 and seqlen [B] int32 (tokens already stored) are
+    device tensors, never Python ints, so a CUDA graph can replay this with
+    them updated in place. Columns past a row's last page are ignored.
+    """
+    if query.ndim != 4 or query.shape[2] != 1:
+        raise ValueError("decode_attend expects query [B, heads, 1, dim]")
+    if _backend(query.dtype) == "flash":
+        return flash_decode(query, key, value, cache, layer, block_table, seqlen)
+    return _torch_decode(query, key, value, cache, layer, block_table, seqlen, n_rep)
+
+
+def _torch_decode(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    cache: PagedKvCache,
+    layer: int,
+    block_table: torch.Tensor,
+    seqlen: torch.Tensor,
+    n_rep: int,
+) -> torch.Tensor:
+    """Reference for decode_attend: tensor ops only, reads every column of the table.
+
+    Exact enough for fp32 parity tests on CPU. Serving uses the flash kernel,
+    which stops at each row's seqlen instead of masking a full-width read.
+    """
+    cache_k, cache_v = cache.layer_kv(layer)
+    page = cache.page_size
+    batch, width = int(block_table.shape[0]), int(block_table.shape[1])
+    past = seqlen.long()
+    table = block_table.long()
+    current = table.gather(1, (past // page).unsqueeze(1)).squeeze(1)
+    write_slots(cache_k, cache_v, current * page + past % page, key[:, :, 0], value[:, :, 0])
+    # [B, W, page, KH, D] -> [B, KH, W * page, D]
+    k = cache_k[table].reshape(batch, width * page, *cache_k.shape[-2:]).permute(0, 2, 1, 3)
+    v = cache_v[table].reshape(batch, width * page, *cache_v.shape[-2:]).permute(0, 2, 1, 3)
+    if n_rep > 1:
+        k = k.repeat_interleave(n_rep, dim=1)
+        v = v.repeat_interleave(n_rep, dim=1)
+    visible = torch.arange(width * page, device=query.device)[None, :] <= past[:, None]
+    mask = torch.zeros(batch, 1, 1, width * page, device=query.device, dtype=query.dtype)
+    mask = mask.masked_fill(~visible[:, None, None, :], torch.finfo(query.dtype).min)
+    return F.scaled_dot_product_attention(query, k, v, attn_mask=mask)
+
+
 def flash_decode(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -214,9 +273,9 @@ def flash_decode(
     block_table: torch.Tensor,
     seqlen: torch.Tensor,
 ) -> torch.Tensor:
-    """q_len=1. block_table and seqlen are caller-owned so a CUDA graph can replay them.
+    """q_len=1 for B rows. block_table and seqlen are caller-owned so a CUDA graph can replay them.
 
-    seqlen is tokens already in the cache, shape [1] int32. The kernel appends key/value.
+    seqlen is tokens already in the cache, shape [B] int32. The kernel appends key/value.
     """
     if cache.page_size % FLASH_PAGE_SIZE != 0:
         raise ValueError(
