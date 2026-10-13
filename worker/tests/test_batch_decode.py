@@ -109,10 +109,12 @@ class _Harness:
 def _decode_loop(test: unittest.TestCase, harness: _Harness, tol: float) -> None:
     """Varying batch sizes across steps, sequences joining and leaving, padding every step."""
     page = harness.ref.page_size
+    vocab = harness.config.vocab_size
+    # Length is one page, so the first decode writes the next page. Ids stay in the vocab.
     seqs = {
         "a": [list(range(1, 6)), (0, 1, 2)],
         "b": [list(range(10, 13)), (3, 4)],
-        "c": [list(range(20, 20 + page)), (5, 6, 7)],  # the first decode opens page 2
+        "c": [[(20 + i) % vocab for i in range(page)], (5, 6, 7)],
     }
     with torch.inference_mode():
         for prompt, table in seqs.values():
