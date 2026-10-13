@@ -37,3 +37,4 @@
 | 2026-10-09 | Worker 优雅退出：SIGINT/SIGTERM 置 stop 事件 → `server.stop(grace)` → `engine.close()`；`Engine` 协议加 `close()`。|
 | 2026-10-13 | 阶段 4 云上对比（A100 80GB，vLLM 0.11）：同配置下 DistIE 并发 1 达 vLLM 的 83%、并发 64 达 31%；批 decode 每步多约 14 ms 且 GPU 利用率仅约 46%，瓶颈是 CPU（批 decode 无 CUDA graph）。|
 | 2026-10-13 | 新增英文 `README.md`：项目简介、架构图、阶段结果与 vLLM 对比、差距分析、Quickstart、配置表与 Roadmap。|
+| 2026-10-13 | README 精简重排：架构图简化，结果改为一张 vLLM 对比图（亮/暗两版 SVG），完整表格与配置收进折叠块。|
