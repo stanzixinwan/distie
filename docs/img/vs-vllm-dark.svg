@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 236" width="860" height="236" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif' role="img" aria-label="DistIE versus vLLM on an A100">
+<text x="0.0" y="20" fill="#f0f6fc" font-size="15" font-weight="600" text-anchor="start">Throughput vs vLLM 0.11</text>
+<text x="0.0" y="40" fill="#9198a1" font-size="12" font-weight="400" text-anchor="start">same A100, same scheduler limits · vLLM = 100%</text>
+<text x="0.0" y="94" fill="#f0f6fc" font-size="13" font-weight="400" text-anchor="start">Concurrency 1</text>
+<path d="M122.0,78 h214.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-214.0 z" fill="#262c36"/>
+<path d="M122.0,78 h177.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-177.8 z" fill="#3987e5"/>
+<text x="295.8" y="94" fill="#ffffff" font-size="13" font-weight="600" text-anchor="end">83%</text>
+<text x="122.0" y="117" fill="#9198a1" font-size="12" font-weight="400" text-anchor="start">173 vs 208 tok/s</text>
+<text x="0.0" y="164" fill="#f0f6fc" font-size="13" font-weight="400" text-anchor="start">Concurrency 64</text>
+<path d="M122.0,148 h214.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-214.0 z" fill="#262c36"/>
+<path d="M122.0,148 h63.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-63.8 z" fill="#3987e5"/>
+<text x="197.8" y="164" fill="#f0f6fc" font-size="13" font-weight="600" text-anchor="start">31%</text>
+<text x="122.0" y="187" fill="#9198a1" font-size="12" font-weight="400" text-anchor="start">1,475 vs 4,739 tok/s</text>
+<line x1="340" y1="64" x2="340" y2="214" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="340.0" y="230" fill="#9198a1" font-size="12" font-weight="400" text-anchor="end">vLLM</text>
+<text x="400.0" y="20" fill="#f0f6fc" font-size="15" font-weight="600" text-anchor="start">Decode step at concurrency 64</text>
+<text x="400.0" y="40" fill="#9198a1" font-size="12" font-weight="400" text-anchor="start">TPOT p50 · 32 seats on both sides</text>
+<line x1="470.0" y1="64" x2="470.0" y2="160" stroke="#3d444d" stroke-width="1"/>
+<text x="470.0" y="176" fill="#9198a1" font-size="11" font-weight="400" text-anchor="middle">0</text>
+<line x1="565.0" y1="64" x2="565.0" y2="160" stroke="#3d444d" stroke-width="1"/>
+<text x="565.0" y="176" fill="#9198a1" font-size="11" font-weight="400" text-anchor="middle">5</text>
+<line x1="660.0" y1="64" x2="660.0" y2="160" stroke="#3d444d" stroke-width="1"/>
+<text x="660.0" y="176" fill="#9198a1" font-size="11" font-weight="400" text-anchor="middle">10</text>
+<line x1="755.0" y1="64" x2="755.0" y2="160" stroke="#3d444d" stroke-width="1"/>
+<text x="755.0" y="176" fill="#9198a1" font-size="11" font-weight="400" text-anchor="middle">15</text>
+<line x1="850.0" y1="64" x2="850.0" y2="160" stroke="#3d444d" stroke-width="1"/>
+<text x="850.0" y="176" fill="#9198a1" font-size="11" font-weight="400" text-anchor="end">20 ms</text>
+<text x="400.0" y="94" fill="#f0f6fc" font-size="13" font-weight="400" text-anchor="start">vLLM</text>
+<path d="M470.0,78 h105.1 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-105.1 z" fill="#6e7681"/>
+<text x="587.1" y="94" fill="#f0f6fc" font-size="13" font-weight="600" text-anchor="start">5.7 ms</text>
+<text x="400.0" y="144" fill="#f0f6fc" font-size="13" font-weight="400" text-anchor="start">DistIE</text>
+<rect x="470.0" y="128" width="172.6" height="22" fill="#3987e5"/>
+<path d="M644.6,128 h196.6 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-196.6 z" fill="#d95926"/>
+<text x="837.2" y="144" fill="#ffffff" font-size="13" font-weight="600" text-anchor="end">19.8 ms</text>
+<rect x="470" y="205" width="10" height="10" rx="2" fill="#3987e5"/>
+<text x="485.0" y="214" fill="#9198a1" font-size="12" font-weight="400" text-anchor="start">GPU busy ≈46%</text>
+<rect x="644.615" y="205" width="10" height="10" rx="2" fill="#d95926"/>
+<text x="659.6" y="214" fill="#9198a1" font-size="12" font-weight="400" text-anchor="start">GPU idle, waiting on Python</text>
+</svg>
