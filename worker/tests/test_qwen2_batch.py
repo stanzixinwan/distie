@@ -149,5 +149,96 @@ class ForwardBatchTest(unittest.TestCase):
             sys.modules.pop("flash_attn", None)
 
 
+class ForwardDecodeBatchTest(unittest.TestCase):
+    """forward_decode with B rows, driven by fixed-width tensors as a CUDA graph would."""
+
+    def test_rows_match_single_sequence_decode(self) -> None:
+        torch.manual_seed(0)
+        config = _config()
+        model = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval())
+        # Lengths straddle page boundaries: the new token of row 1 opens page 2.
+        prompts = [torch.randint(0, config.vocab_size, (n,)) for n in (5, 8, 2)]
+        tables = [(0, 1), (2, 3, 4), (5,)]
+        nxt = [7, 9, 11]
+
+        single = _cache(config, page_size=4)
+        batched = _cache(config, page_size=4)
+        width = 4
+        with torch.inference_mode():
+            want = []
+            for prompt, table, tok in zip(prompts, tables, nxt):
+                for cache in (single, batched):
+                    model.forward_paged(prompt.unsqueeze(0), cache, list(table), 0)
+                step = torch.tensor([[tok]])
+                want.append(model.forward_paged(step, single, list(table), len(prompt))[0, -1])
+
+            ids = torch.tensor([[t] for t in nxt])
+            position = torch.tensor([[len(p)] for p in prompts])
+            seqlen = torch.tensor([len(p) for p in prompts], dtype=torch.int32)
+            # Unused columns hold stale but valid block ids; they must be ignored.
+            block_table = torch.tensor([list(t) + [6] * (width - len(t)) for t in tables], dtype=torch.int32)
+            got = model.forward_decode(ids, batched, block_table, position, seqlen)
+
+        self.assertEqual(tuple(got.shape), (3, 1, config.vocab_size))
+        for row, ref in enumerate(want):
+            self.assertLess((got[row, 0] - ref).abs().max().item(), 1e-4)
+        for layer in range(config.num_hidden_layers):
+            k_single, v_single = single.layer_kv(layer)
+            k_batched, v_batched = batched.layer_kv(layer)
+            self.assertLess((k_single - k_batched).abs().max().item(), 1e-5)
+            self.assertLess((v_single - v_batched).abs().max().item(), 1e-5)
+
+    def test_rejects_mismatched_shapes(self) -> None:
+        config = _config()
+        model = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval())
+        cache = _cache(config, page_size=4)
+        ids = torch.zeros(2, 1, dtype=torch.long)
+        table = torch.zeros(2, 2, dtype=torch.int32)
+        with torch.inference_mode(), self.assertRaises(ValueError):
+            model.forward_decode(ids, cache, table, torch.zeros(1, 1, dtype=torch.long), torch.zeros(2, dtype=torch.int32))
+        with torch.inference_mode(), self.assertRaises(ValueError):
+            model.forward_decode(ids, cache, table[:1], torch.zeros(2, 1, dtype=torch.long), torch.zeros(2, dtype=torch.int32))
+
+    def test_flash_decode_call_contract(self) -> None:
+        calls: dict = {}
+        fake = types.ModuleType("flash_attn")
+
+        def flash_attn_with_kvcache(q, k_cache, v_cache, k=None, v=None, cache_seqlens=None, block_table=None, causal=False, **kwargs):
+            calls["q"] = tuple(q.shape)
+            calls["k"] = tuple(k.shape)
+            calls["seqlens"] = cache_seqlens.tolist()
+            calls["table"] = block_table.tolist()
+            return torch.zeros_like(q)
+
+        def flash_attn_varlen_func(*args, **kwargs):
+            raise AssertionError("pure decode must use flash_attn_with_kvcache")
+
+        fake.flash_attn_with_kvcache = flash_attn_with_kvcache
+        fake.flash_attn_varlen_func = flash_attn_varlen_func
+        sys.modules["flash_attn"] = fake
+        os.environ["DISTIE_ATTN"] = "flash"
+        try:
+            config = _config()
+            model = Qwen2CausalLM.from_hf(Qwen2ForCausalLM(config).eval()).half()
+            cache = _cache(config, page_size=256, num_blocks=3, dtype=torch.float16)
+            table = torch.tensor([[2, 0], [0, 1]], dtype=torch.int32)
+            with torch.inference_mode():
+                logits = model.forward_decode(
+                    torch.tensor([[1], [2]]),
+                    cache,
+                    table,
+                    torch.tensor([[5], [300]]),
+                    torch.tensor([5, 300], dtype=torch.int32),
+                )
+            self.assertEqual(tuple(logits.shape), (2, 1, config.vocab_size))
+            self.assertEqual(calls["q"], (2, 1, 4, 8))
+            self.assertEqual(calls["k"], (2, 1, 2, 8))
+            self.assertEqual(calls["seqlens"], [5, 300])
+            self.assertEqual(calls["table"], [[2, 0], [0, 1]])
+        finally:
+            os.environ.pop("DISTIE_ATTN", None)
+            sys.modules.pop("flash_attn", None)
+
+
 if __name__ == "__main__":
     unittest.main()

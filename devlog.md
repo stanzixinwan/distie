@@ -38,3 +38,9 @@
 | 2026-10-13 | 阶段 4 云上对比（A100 80GB，vLLM 0.11）：同配置下 DistIE 并发 1 达 vLLM 的 83%、并发 64 达 31%；批 decode 每步多约 14 ms 且 GPU 利用率仅约 46%，瓶颈是 CPU（批 decode 无 CUDA graph）。|
 | 2026-10-13 | 新增英文 `README.md`：项目简介、架构图、阶段结果与 vLLM 对比、差距分析、Quickstart、配置表与 Roadmap。|
 | 2026-10-13 | README 精简重排：架构图简化，结果改为一张 vLLM 对比图（亮/暗两版 SVG），完整表格与配置收进折叠块。|
+| 2026-10-13 | 批 decode CUDA graph：`forward_decode` 支持 [B,1]；`BatchDecodeGraphs` 按批大小分桶录制，block table 固定宽度，空位行写入 slab 末尾的备用页；`ModelRunner` 纯 decode 步走 graph，出错退回 eager；新增 `WORKER_DECODE_GRAPHS` 开关。GPU 实测待做。|
+| 2026-10-13 | `test_batch_decode` 的长 prompt 按词表取模：页大小只决定长度，token id 不再越过 `vocab_size`，避免 CUDA embedding gather 越界。|
+| 2026-10-13 | 阶段 4.5 本地验收（3080）：GPU 单测 5/5；graph 开/关对比，吞吐 956.5 → 1271.2 tok/s（+33%），TPOT p50 29.75 → 22.68 ms。|
+| 2026-10-13 | 新增 `WORKER_STEP_STATS=N`：每 N 步按 decode / prefill 分组记录 sched、gpu、wait、emit 的平均耗时和占比，用来定位剩余开销。|
+| 2026-10-13 | 3080 每步拆分：decode 步 GPU 线程 17.8–18.4 ms 且与批大小无关，wait 约 3 ms（11–14%），调度 + 发送约 2%；prefill 步约 15% 步数、四分之一墙钟。step stats 再把 gpu 拆成 kernel（CUDA event）和 host。|
+| 2026-10-13 | 3080 kernel/host 拆分：graph decode 步 kernel 15.9–16.4 ms、host 约 2 ms，与批大小无关；每步约 1300 个小 kernel（每层约 46 个）是读权重下限（约 8 ms）之外的主要开销。下一步做算子融合。|

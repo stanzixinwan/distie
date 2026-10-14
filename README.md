@@ -42,11 +42,13 @@ flowchart LR
 
 ### Where the gap comes from
 
-Batched decode is **CPU-bound**. Batch-1 decode is captured as a CUDA Graph, but batched decode is not: each step, Python launches every layer's kernels and builds `cu_seqlens`, `slot_mapping` and block tables. That costs about 14 ms per step. Three measurements point to it:
+Batched decode is **CPU-bound**. In the measured version, batch-1 decode was captured as a CUDA Graph but batched decode was not. Each step, Python launched every layer's kernels and built `cu_seqlens`, `slot_mapping` and block tables, which cost about 14 ms per step. Three measurements point to it:
 
 - **The GPU idles about half the time.** SM utilization holds at 45–47% during decode at concurrency 64.
 - **Batch size barely matters.** Doubling the seats from 32 to 64 adds only 8% to TPOT.
 - **A faster GPU barely helps.** Moving from the 3080 to the A100 cut batch-1 TPOT from 13.2 to 5.7 ms, but batched TPOT only went from 29.7 to 19.8 ms.
+
+Stage 4.5 now replays batched decode from bucketed CUDA Graphs as well. On the 3080 at concurrency 64 this raised throughput from 956 to 1271 tok/s (+33%) and cut TPOT p50 from 29.8 to 22.7 ms ([report](benchmarks/results/stage4.5-3080.md)). A100 numbers are pending.
 
 ### Stage by stage (RTX 3080 Laptop)
 
@@ -106,6 +108,8 @@ make sharegpt && make bench     # load test the worker (BACKEND=openai TARGET=..
 | `WORKER_NUM_BLOCKS` | `1024` | KV pages (256 tokens each with `flash`) |
 | `WORKER_MAX_SEQS` | `32` | Sequences running at once |
 | `WORKER_TOKEN_BUDGET` | `2048` | Tokens per scheduler step |
+| `WORKER_DECODE_GRAPHS` | `1` | Replay pure-decode steps from CUDA graphs (needs CUDA and `flash`) |
+| `WORKER_STEP_STATS` | `0` | Every N steps, log where step time goes: schedule, GPU, event-loop wait, emit (0 = off) |
 | `WORKER_MODEL` | `Qwen/Qwen2.5-1.5B-Instruct` | HuggingFace model ID |
 | `WORKER_DEVICE` | `cuda` | `cuda` or `cpu` |
 | `WORKER_LISTEN_ADDR` | `:50052` | Worker listen address |
@@ -134,7 +138,8 @@ benchmarks/  HF parity, decode latency, load generator, results/
 - [x] **2** Correctness suite and baseline
 - [x] **3** In-house Qwen2 forward, paged FlashAttention, CUDA Graph decode
 - [x] **4** Continuous batching and the vLLM comparison
-- [ ] **Next** CUDA Graphs for batched decode, bucketed by batch size · per-step metadata out of Python · seats sized from KV capacity
+- [x] **4.5** CUDA Graphs for batched decode, bucketed by batch size: +33% throughput on the 3080 (A100 re-measurement pending)
+- [ ] **Next** Per-step metadata out of Python · seats sized from KV capacity
 - [ ] **5** C++ KV block manager: refcounts, prefix caching, LRU eviction, copy-on-write, CPU swap
 - [ ] **6** Prefix-aware routing across workers
 - [ ] **7** Observability
