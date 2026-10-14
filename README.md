@@ -109,6 +109,7 @@ make sharegpt && make bench     # load test the worker (BACKEND=openai TARGET=..
 | `WORKER_MAX_SEQS` | `32` | Sequences running at once |
 | `WORKER_TOKEN_BUDGET` | `2048` | Tokens per scheduler step |
 | `WORKER_DECODE_GRAPHS` | `1` | Replay pure-decode steps from CUDA graphs (needs CUDA and `flash`) |
+| `DISTIE_FUSED_ROPE` | `1` | Decode applies RoPE inside the flash kernel instead of separate kernels |
 | `WORKER_STEP_STATS` | `0` | Every N steps, log where step time goes: schedule, GPU, event-loop wait, emit (0 = off) |
 | `WORKER_MODEL` | `Qwen/Qwen2.5-1.5B-Instruct` | HuggingFace model ID |
 | `WORKER_DEVICE` | `cuda` | `cuda` or `cpu` |
@@ -139,6 +140,7 @@ benchmarks/  HF parity, decode latency, load generator, results/
 - [x] **3** In-house Qwen2 forward, paged FlashAttention, CUDA Graph decode
 - [x] **4** Continuous batching and the vLLM comparison
 - [x] **4.5** CUDA Graphs for batched decode, bucketed by batch size: +33% throughput on the 3080 (A100 re-measurement pending)
+- [ ] **4.6** Kernel fusion for decode: RoPE inside flash (done, GPU numbers pending) · fused RMSNorm + residual · merged QKV and gate/up GEMMs
 - [ ] **Next** Per-step metadata out of Python · seats sized from KV capacity
 - [ ] **5** C++ KV block manager: refcounts, prefix caching, LRU eviction, copy-on-write, CPU swap
 - [ ] **6** Prefix-aware routing across workers

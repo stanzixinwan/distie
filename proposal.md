@@ -190,6 +190,18 @@ flowchart LR
 
 
 
+### 阶段 4.6：decode 算子融合（进行中）
+
+- 动机：阶段 4.5 的每步拆分显示，graph decode 步的 kernel 时间约 16 ms，host 侧约 2 ms，与批大小无关。3080 读一遍权重约 8 ms，其余主要是每步约 1300 个小 kernel 的固定开销（每层约 46 个）。
+- 按「省掉的 kernel 数 / 风险」逐项做，每项单独验收：
+  1. RoPE 交给 `flash_attn_with_kvcache` 的 `rotary_cos` / `rotary_sin` 在 kernel 内完成（每层约省 12 个）。`DISTIE_FUSED_ROPE=0` 可关闭。
+  2. RMSNorm 与残差相加融合为一个 Triton kernel（每层约省 12 个）。
+  3. Q/K/V 合并为一个 GEMM，gate/up 合并为一个 GEMM（每层省 3 个）。
+  4. 对照：`torch.compile` 自动融合。
+- **验收**：每项都与 HF 贪心逐 token 一致（fp16），并给出 3080 上 decode 步 kernel 时间和吞吐的 A/B。目标：kernel 时间从约 16 ms 降到 12 ms 以内。
+
+
+
 ### 阶段 5：C++ KV 块管理器
 
 - 在 `BlockPool` 基础上增加引用计数、前缀哈希索引、LRU 淘汰、Copy-on-Write。
@@ -398,6 +410,16 @@ Local numbers are for iteration and debugging. Numbers reported externally come 
 - Each step copies only the tokens, positions, lengths and block table from pinned memory into the graph's fixed buffers, then replays. Steps with any prefill stay on the eager varlen path, and a graph error falls back to eager. `WORKER_DECODE_GRAPHS=0` turns graphs off for A/B runs.
 - **Acceptance**: graph replay matches the eager varlen path token for token (`worker/tests/test_batch_decode.py`, CUDA case). On the A100, concurrency-64 TPOT drops from 19.8 ms to under 10 ms, and throughput reaches at least 60% of vLLM with the same configuration.
 - **3080 result** (2026-10-13, ShareGPT 200 requests, concurrency 64): the GPU tests pass 5/5. With graphs on versus off, throughput goes from 956.5 to 1271.2 tok/s (+33%) and TPOT p50 from 29.75 to 22.68 ms. That is still well above the roughly 7 ms the 3080 needs to read the weights once per step. The next step is to split step time with `WORKER_STEP_STATS` and find the remaining overhead. See `benchmarks/results/stage4.5-3080.md`.
+
+### Stage 4.6: Kernel fusion for decode (in progress)
+
+- Why: the stage 4.5 step breakdown shows a graph decode step spends about 16 ms in kernels and about 2 ms on the host, independent of batch size. Reading the weights once takes about 8 ms on the 3080; most of the rest is the fixed cost of about 1300 small kernels per step (about 46 per layer).
+- Done one change at a time, ordered by kernels saved versus risk, each with its own acceptance:
+  1. RoPE moves into `flash_attn_with_kvcache` through `rotary_cos` / `rotary_sin` (about 12 kernels per layer). `DISTIE_FUSED_ROPE=0` turns it off.
+  2. RMSNorm and the residual add fuse into one Triton kernel (about 12 per layer).
+  3. Q/K/V merge into one GEMM, and gate/up into one GEMM (3 per layer).
+  4. Control: automatic fusion with `torch.compile`.
+- **Acceptance**: each change matches HF greedy decoding token for token in fp16, with an A/B of decode-step kernel time and throughput on the 3080. Target: kernel time from about 16 ms to under 12 ms.
 
 ### Stage 5: C++ KV block manager
 
