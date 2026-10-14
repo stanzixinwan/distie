@@ -46,6 +46,8 @@ class DecodeGraph:
         replay is what writes this token's K/V and fills the logits.
         """
         self._fill(token_id, seq_len, block_ids)
+        if hasattr(self.model, "rope_table"):
+            self.model.rope_table(self.token.device, self.cache.dtype)
         torch.cuda.synchronize()
         with torch.cuda.graph(self.graph):
             self.logits = self.model.forward_decode(

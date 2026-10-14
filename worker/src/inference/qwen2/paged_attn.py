@@ -165,6 +165,13 @@ def flash_enabled(dtype: torch.dtype) -> bool:
     return _backend(dtype) == "flash"
 
 
+def fused_rope_enabled(dtype: torch.dtype) -> bool:
+    """Decode applies RoPE inside the flash kernel unless DISTIE_FUSED_ROPE=0."""
+    if _backend(dtype) != "flash":
+        return False
+    return os.environ.get("DISTIE_FUSED_ROPE", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
 def serving_page_size(dtype: torch.dtype) -> int:
     """Page size for a newly allocated slab. The torch path keeps the small default."""
     if _backend(dtype) == "flash":
@@ -272,10 +279,14 @@ def flash_decode(
     layer: int,
     block_table: torch.Tensor,
     seqlen: torch.Tensor,
+    rope_table: tuple[torch.Tensor, torch.Tensor] | None = None,
 ) -> torch.Tensor:
     """q_len=1 for B rows. block_table and seqlen are caller-owned so a CUDA graph can replay them.
 
     seqlen is tokens already in the cache, shape [B] int32. The kernel appends key/value.
+    With rope_table (cos, sin [max_positions, dim / 2]), query and key arrive
+    without RoPE and the kernel rotates them at position seqlen, rotate-half
+    style (rotary_interleaved=False), saving the separate RoPE kernels.
     """
     if cache.page_size % FLASH_PAGE_SIZE != 0:
         raise ValueError(
@@ -285,6 +296,9 @@ def flash_decode(
     from flash_attn import flash_attn_with_kvcache
 
     cache_k, cache_v = cache.layer_kv(layer)
+    rotary = {}
+    if rope_table is not None:
+        rotary = {"rotary_cos": rope_table[0], "rotary_sin": rope_table[1], "rotary_interleaved": False}
     out = flash_attn_with_kvcache(
         query.transpose(1, 2).contiguous(),
         cache_k,
@@ -294,6 +308,7 @@ def flash_decode(
         cache_seqlens=seqlen,
         block_table=block_table,
         causal=True,
+        **rotary,
     )
     return out.transpose(1, 2).contiguous()
 

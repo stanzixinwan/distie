@@ -94,6 +94,9 @@ class BatchDecodeGraphs:
         self._width = cache.num_blocks
         self._buckets: dict[int, _Bucket] = {}
         self._pool = torch.cuda.graph_pool_handle() if use_graphs else None
+        if hasattr(model, "rope_table"):
+            # Fused-RoPE decode reads this table; it must exist before any capture.
+            model.rope_table(device, cache.dtype)
 
         # Pinned staging so the per-step host-to-device copies are async.
         pin = device.type == "cuda"

@@ -15,7 +15,7 @@ import torch
 from torch import nn
 
 from inference.kv_cache import PagedKvCache
-from inference.qwen2.paged_attn import BatchMeta, attend, attend_batch, decode_attend
+from inference.qwen2.paged_attn import BatchMeta, attend, attend_batch, decode_attend, flash_decode, fused_rope_enabled
 
 _log = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ class Qwen2Dims:
     rms_norm_eps: float
     rope_theta: float
     tie_word_embeddings: bool
+    max_position_embeddings: int = 32768
 
     @property
     def num_key_value_groups(self) -> int:
@@ -71,6 +72,7 @@ class Qwen2Dims:
             rms_norm_eps=float(config.rms_norm_eps),
             rope_theta=rope,
             tie_word_embeddings=bool(getattr(config, "tie_word_embeddings", False)),
+            max_position_embeddings=int(getattr(config, "max_position_embeddings", 32768)),
         )
 
 
@@ -103,6 +105,16 @@ class RotaryEmbedding(nn.Module):
         freqs = position_ids[..., None].float() * self.inv_freq.to(device=x.device, dtype=torch.float)
         emb = torch.cat((freqs, freqs), dim=-1)
         return emb.cos().to(dtype=x.dtype), emb.sin().to(dtype=x.dtype)
+
+    def half_table(self, max_positions: int, device, dtype) -> tuple[torch.Tensor, torch.Tensor]:
+        """cos/sin [max_positions, head_dim / 2] for kernels that rotate in place.
+
+        Same fp32 math as forward(), cast at the end, so a kernel applying
+        rotate-half with these rows reproduces forward()'s rotation.
+        """
+        positions = torch.arange(max_positions, device=device, dtype=torch.float)
+        freqs = positions[:, None] * self.inv_freq.to(device=device, dtype=torch.float)[None, :]
+        return freqs.cos().to(dtype).contiguous(), freqs.sin().to(dtype).contiguous()
 
 
 def _apply_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
@@ -183,7 +195,12 @@ class Attention(nn.Module):
         layer: int,
         block_table: torch.Tensor,
         seqlen: torch.Tensor,
+        rope_table: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
+        if rope_table is not None:
+            # The flash kernel rotates q and the new k itself, at position seqlen.
+            query, key, value = self._qkv(hidden)
+            return self._merge(flash_decode(query, key, value, cache, layer, block_table, seqlen, rope_table))
         query, key, value = self._project(hidden, cos, sin)
         return self._merge(
             decode_attend(query, key, value, cache, layer, block_table, seqlen, self.num_kv_groups)
@@ -212,11 +229,16 @@ class Attention(nn.Module):
         return self._merge(mixed.transpose(0, 1).unsqueeze(0))
 
     def _project(self, hidden: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
+        query, key, value = self._qkv(hidden)
+        query, key = _apply_rope(query, key, cos, sin)
+        return query, key, value
+
+    def _qkv(self, hidden: torch.Tensor):
+        """Projections without RoPE: [batch, heads, seq, dim] for q, [batch, kv_heads, seq, dim] for k/v."""
         batch, seq, _ = hidden.shape
         query = self.q_proj(hidden).view(batch, seq, self.num_heads, self.head_dim).transpose(1, 2)
         key = self.k_proj(hidden).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
         value = self.v_proj(hidden).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        query, key = _apply_rope(query, key, cos, sin)
         return query, key, value
 
     def _merge(self, mixed: torch.Tensor) -> torch.Tensor:
@@ -271,9 +293,12 @@ class DecoderLayer(nn.Module):
         layer: int,
         block_table: torch.Tensor,
         seqlen: torch.Tensor,
+        rope_table: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         normed = self.input_layernorm(hidden)
-        hidden = hidden + self.self_attn.forward_decode(normed, cos, sin, cache, layer, block_table, seqlen)
+        hidden = hidden + self.self_attn.forward_decode(
+            normed, cos, sin, cache, layer, block_table, seqlen, rope_table
+        )
         return hidden + self.mlp(self.post_attention_layernorm(hidden))
 
     def forward_batch(
@@ -301,6 +326,22 @@ class Qwen2CausalLM(nn.Module):
         self.lm_head = nn.Linear(dims.hidden_size, dims.vocab_size, bias=False)
         if dims.tie_word_embeddings:
             self.lm_head.weight = self.embed_tokens.weight
+        self._rope_tables: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
+
+    def rope_table(self, device, dtype) -> tuple[torch.Tensor, torch.Tensor]:
+        """cos/sin rows for every position, built once per device and dtype.
+
+        Call this before capturing a CUDA graph: building it inside a
+        capture would record the table math into the graph.
+        """
+        key = (torch.device(device), dtype)
+        table = self._rope_tables.get(key)
+        if table is None:
+            if torch.cuda.is_available() and torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("build the RoPE table with rope_table() before capturing a CUDA graph")
+            table = self.rotary_emb.half_table(self.dims.max_position_embeddings, key[0], dtype)
+            self._rope_tables[key] = table
+        return table
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Dense prefill. input_ids [batch, seq] -> logits [batch, seq, vocab]."""
@@ -361,9 +402,14 @@ class Qwen2CausalLM(nn.Module):
         if block_table.ndim != 2 or int(block_table.shape[0]) != batch:
             raise ValueError("forward_decode expects block_table [B, W]")
         hidden = self.embed_tokens(input_ids)
-        cos, sin = self.rotary_emb(hidden, position)
+        if fused_rope_enabled(hidden.dtype):
+            rope_table = self.rope_table(hidden.device, hidden.dtype)
+            cos = sin = None
+        else:
+            rope_table = None
+            cos, sin = self.rotary_emb(hidden, position)
         for index, layer in enumerate(self.layers):
-            hidden = layer.forward_decode(hidden, cos, sin, cache, index, block_table, seqlen)
+            hidden = layer.forward_decode(hidden, cos, sin, cache, index, block_table, seqlen, rope_table)
         return self.lm_head(self.norm(hidden))
 
     def forward_batch(self, input_ids: torch.Tensor, cache: PagedKvCache, meta: BatchMeta) -> torch.Tensor:
