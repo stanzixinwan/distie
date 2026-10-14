@@ -47,4 +47,26 @@ ShareGPT 200 条，`--rate inf`，并发 64，两次都是 200/200 成功。同�
 
 下一步：`gpu` 已拆成 `kernel`（CUDA event 量出的 forward 本身）和 `host`（GPU 线程里 forward 之外的时间：组装输入、采样、同步）。重跑一次即可判断这 18 ms 是 kernel 本身慢（需要算子融合 / 调 split 参数），还是 host 侧开销。
 
+## GPU 线程再拆：kernel 与 host
+
+`gpu` 拆成 `kernel`（forward 前后各一个 CUDA event，graph 步即纯 GPU 执行时间）和 `host`（GPU 线程里 forward 之外的时间）。稳态（rows=32）：
+
+| 步类型 | gpu | kernel | host |
+|---|---:|---:|---:|
+| decode（graph） | 17.7–18.2 ms | **15.9–16.4 ms** | 1.8–2.2 ms |
+| prefill（eager） | 34–45 ms | 31–42 ms | 3.0–3.5 ms |
+
+rows=1 时 decode kernel 13.9 ms，rows≈6 时 17.8 ms，rows=32 时 15.9 ms：kernel 时间与批大小基本无关。
+
+结论：**慢在 kernel 本身，host 侧只占约 2 ms。** 按 3080 Laptop 的带宽估算，每步读一遍约 3.1 GB 权重需要约 8 ms，attention 读 KV 约 1 ms，剩下约 6–7 ms 是大量小 kernel 的固定开销。
+
+在 CPU 上数了一遍 `forward_decode` 的算子：每层约 56 个（flash 路径约 46 个），其中 RMSNorm 拆成 to / pow / mean / rsqrt / mul 等 7 个左右，RoPE 有 cat / neg / mul / add 十几个，Q/K/V 和 gate/up 分别是独立 GEMM。28 层合计约 1300 个 kernel。graph 去掉了 CPU 发射开销，但每个 kernel 在 GPU 上仍有几微秒的启动和尾部开销，1300 个累计约 6 ms，与上面的缺口吻合。eager 的 prefill 步每个 kernel 还要加上 Python 发射时间，所以 150–230 个新 token 就要 31–42 ms。
+
+下一步是减少 kernel 数量（算子融合），对 graph decode 和 eager prefill 都有效：
+
+1. RoPE 交给 `flash_attn_with_kvcache` 的 `rotary_cos` / `rotary_sin` 参数在 kernel 内完成；
+2. RMSNorm 和残差相加融合成一个 Triton kernel；
+3. Q/K/V 合并为一个 GEMM，gate/up 合并为一个 GEMM；
+4. 对照实验：`torch.compile` 自动融合，看手工融合与编译器各能拿到多少。
+
 原始报告：[`stage4.5-3080/graphs-off.json`](stage4.5-3080/graphs-off.json)、[`stage4.5-3080/graphs-on.json`](stage4.5-3080/graphs-on.json)。A/B 复现脚本：`scripts/ab_decode_graphs.sh`。
