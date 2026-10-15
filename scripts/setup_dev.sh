@@ -17,7 +17,20 @@ command -v uv >/dev/null || {
 }
 
 uv venv --python "$PY_VERSION" --allow-existing .venv
-uv pip install --python .venv/bin/python -r worker/requirements.txt cmake ninja
+# flash-attn compiles against the torch already in this env (setup.py imports it),
+# so PEP 517 build isolation cannot see torch. Install everything else first.
+uv pip install --python .venv/bin/python \
+  -r <(grep -vE '^flash-attn([=<>!~]|$)' worker/requirements.txt) \
+  cmake ninja
+
+flash_spec=$(grep -E '^flash-attn([=<>!~]|$)' worker/requirements.txt || true)
+if [[ -n "$flash_spec" && -n "$(command -v nvcc || true)" ]]; then
+  # Build-system deps are not installed when isolation is off.
+  uv pip install --python .venv/bin/python packaging psutil wheel setuptools einops
+  uv pip install --python .venv/bin/python --no-build-isolation "$flash_spec"
+elif [[ -n "$flash_spec" ]]; then
+  echo "warning: nvcc not found; skipping ${flash_spec} (Linux CUDA toolkit required)" >&2
+fi
 
 if command -v go >/dev/null; then
   go install "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO}"
